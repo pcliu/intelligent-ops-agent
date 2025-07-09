@@ -1,4 +1,5 @@
-from typing import TypedDict, List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional
+from typing_extensions import TypedDict
 from datetime import datetime
 from pydantic import BaseModel, Field
 from ..dspy_modules.alert_analyzer import AlertInfo, AlertAnalysisResult

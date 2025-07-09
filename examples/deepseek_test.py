@@ -140,7 +140,7 @@ def test_dspy_modules_with_deepseek():
         print("\n1. 测试告警分析器")
         from src.dspy_modules.alert_analyzer import AlertAnalyzer
         
-        # 注意：这里需要实际的 DSPy 配置，可能需要模拟
+        # 创建告警分析器实例
         alert_analyzer = AlertAnalyzer()
         
         test_alert = AlertInfo(
@@ -154,16 +154,72 @@ def test_dspy_modules_with_deepseek():
         )
         
         print(f"   告警信息: {test_alert.message}")
-        print("   💡 注意: DSPy 模块需要真实的模型调用，当前为演示模式")
+        print("   🔄 正在调用 DeepSeek 模型进行告警分析...")
         
-        # 实际在生产环境中会调用:
-        # analysis_result = alert_analyzer.forward(test_alert)
-        # print(f"   分析结果: {analysis_result}")
+        # 实际调用 DSPy 模块
+        analysis_result = alert_analyzer.forward(
+            alert_info=test_alert,
+            historical_alerts=[]
+        )
+        
+        print("   ✅ 告警分析完成！")
+        print(f"   - 分类: {analysis_result.category}")
+        print(f"   - 优先级: {analysis_result.priority}")
+        print(f"   - 紧急程度: {analysis_result.urgency_score}")
+        print(f"   - 根因提示: {analysis_result.root_cause_hints[:100]}...")
+        print(f"   - 建议操作: {analysis_result.recommended_actions[:100]}...")
+        
+        # 测试诊断智能体
+        print("\n2. 测试诊断智能体")
+        from src.dspy_modules.diagnostic_agent import DiagnosticAgent, DiagnosticContext
+        
+        diagnostic_agent = DiagnosticAgent()
+        diagnostic_context = DiagnosticContext(
+            alert_analysis=analysis_result,
+            system_metrics={"cpu_usage": 0.95, "memory_usage": 0.65},
+            log_entries=["2024-01-01 12:00:00 ERROR: High CPU usage detected"],
+            historical_incidents=[],
+            topology_info={"services": ["web", "api", "db"]}
+        )
+        
+        print("   🔄 正在进行根因诊断...")
+        diagnostic_result = diagnostic_agent.forward(diagnostic_context)
+        
+        print("   ✅ 诊断完成！")
+        print(f"   - 根因: {diagnostic_result.root_cause}")
+        print(f"   - 置信度: {diagnostic_result.confidence_score}")
+        print(f"   - 影响评估: {diagnostic_result.impact_assessment}")
+        print(f"   - 恢复时间估计: {diagnostic_result.recovery_time_estimate}")
+        
+        # 测试行动规划器
+        print("\n3. 测试行动规划器")
+        from src.dspy_modules.action_planner import ActionPlanner
+        
+        action_planner = ActionPlanner()
+        
+        print("   🔄 正在生成行动计划...")
+        action_plan = action_planner.forward(
+            diagnostic_result=diagnostic_result,
+            system_context={"environment": "production", "cluster": "web-cluster"}
+        )
+        
+        print("   ✅ 行动计划生成完成！")
+        print(f"   - 计划ID: {action_plan.plan_id}")
+        print(f"   - 优先级: {action_plan.priority}")
+        print(f"   - 步骤数量: {len(action_plan.steps)}")
+        print(f"   - 预估时间: {action_plan.estimated_duration}分钟")
+        
+        if action_plan.steps:
+            print("   - 主要步骤:")
+            for i, step in enumerate(action_plan.steps[:3], 1):
+                print(f"     {i}. {step.description}")
         
         return True
         
     except Exception as e:
         print(f"   ❌ DSPy 模块测试失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -178,10 +234,90 @@ async def test_intelligent_ops_agent_with_deepseek():
         config.api_key = os.getenv("DEEPSEEK_API_KEY")
         setup_deepseek_llm(config)
         
-        # 创建智能体
-        print("\n1. 创建智能运维智能体")
+        # 测试完整的工作流
+        print("\n1. 测试 LangGraph 工作流")
+        from src.langgraph_workflow.ops_workflow import OpsWorkflow
+        from src.langgraph_workflow.state_manager import StateManager
+        
+        # 创建工作流实例
+        workflow = OpsWorkflow()
+        state_manager = StateManager()
+        
+        # 创建初始状态
+        initial_state = state_manager.initialize_state("deepseek_test_workflow")
+        
+        # 添加测试告警
+        test_alert = AlertInfo(
+            alert_id="deepseek_workflow_test",
+            timestamp="2024-01-01T12:00:00Z",
+            severity="critical",
+            source="deepseek_monitor",
+            message="DeepSeek API 响应时间异常，影响生产环境",
+            metrics={
+                "response_time": 8000,
+                "success_rate": 0.75,
+                "error_rate": 0.25,
+                "cpu_usage": 0.90
+            },
+            tags=["api", "performance", "deepseek", "critical"]
+        )
+        
+        # 更新状态，添加告警
+        initial_state = state_manager.update_state(initial_state, {
+            "current_alert": test_alert
+        })
+        
+        print(f"   告警: {test_alert.message}")
+        print("   🔄 正在运行完整的智能运维工作流...")
+        
+        # 运行工作流
+        step_count = 0
+        results = {}
+        
+        async for step in workflow.stream_run(initial_state, max_iterations=10):
+            step_count += 1
+            step_name = list(step.keys())[0] if step else "unknown"
+            print(f"   📊 步骤 {step_count}: {step_name}")
+            
+            # 保存结果
+            if step:
+                results.update(step)
+            
+            # 限制步骤数量
+            if step_count >= 8:
+                break
+        
+        print("   ✅ 工作流执行完成！")
+        
+        # 显示关键结果
+        final_state = list(results.values())[-1] if results else initial_state
+        
+        if final_state.get("alert_analysis"):
+            analysis = final_state["alert_analysis"]
+            print(f"   - 告警分析: {analysis.category} (优先级: {analysis.priority})")
+        
+        if final_state.get("diagnostic_result"):
+            diagnosis = final_state["diagnostic_result"]
+            print(f"   - 诊断结果: {diagnosis.root_cause}")
+            print(f"   - 置信度: {diagnosis.confidence_score}")
+        
+        if final_state.get("action_plan"):
+            plan = final_state["action_plan"]
+            print(f"   - 行动计划: {len(plan.steps)}个步骤")
+            print(f"   - 预估时间: {plan.estimated_duration}分钟")
+        
+        if final_state.get("execution_result"):
+            exec_result = final_state["execution_result"]
+            print(f"   - 执行结果: {exec_result.status}")
+        
+        if final_state.get("incident_report"):
+            report = final_state["incident_report"]
+            print(f"   - 事件报告: {report.incident_id}")
+        
+        # 测试高级智能体功能
+        print("\n2. 测试高级智能体功能")
         agent_config = AgentConfig(
-            agent_id="deepseek_test_agent",
+            agent_id="deepseek_advanced_agent",
             agent_type="general",
             specialization="deepseek_powered",
             enable_learning=True,
@@ -190,38 +326,41 @@ async def test_intelligent_ops_agent_with_deepseek():
         )
         
         agent = IntelligentOpsAgent(agent_config)
-        print(f"   ✅ 智能体创建完成: {agent_config.agent_id}")
+        print(f"   ✅ 高级智能体创建完成: {agent_config.agent_id}")
         
         # 测试告警处理
-        print("\n2. 测试告警处理")
-        test_alert = {
-            "alert_id": "deepseek_test_alert",
+        alert_dict = {
+            "alert_id": "deepseek_advanced_test",
             "timestamp": "2024-01-01T12:00:00Z",
             "severity": "high",
-            "source": "deepseek_monitor",
-            "message": "DeepSeek API 响应时间异常",
+            "source": "advanced_monitor",
+            "message": "内存使用率持续上升，可能存在内存泄漏",
             "metrics": {
-                "response_time": 5000,
-                "success_rate": 0.85,
-                "error_rate": 0.15
+                "memory_usage": 0.92,
+                "memory_growth_rate": 0.05,
+                "gc_frequency": 500
             },
-            "tags": ["api", "performance", "deepseek"]
+            "tags": ["memory", "leak", "performance"]
         }
         
-        print(f"   告警: {test_alert['message']}")
+        print(f"   告警: {alert_dict['message']}")
+        print("   🔄 正在处理告警...")
         
-        # 注意：实际的告警处理需要 LLM 调用
-        print("   💡 注意: 完整的告警处理需要 LLM 模型调用")
-        print("   当前演示智能体的基础功能")
+        # 使用智能体处理告警
+        result = await agent.process_alert(alert_dict)
+        print(f"   ✅ 告警处理: {result['status']}")
         
-        # 获取智能体状态
-        status = agent.get_agent_status()
-        print(f"   智能体状态: {status['current_state']}")
+        # 获取性能指标
+        metrics = agent.get_performance_metrics()
+        print(f"   📊 处理事件数: {metrics['incidents_processed']}")
+        print(f"   📊 成功率: {metrics['success_rate']:.1%}")
         
         return True
         
     except Exception as e:
         print(f"   ❌ 智能体测试失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return False
 
 

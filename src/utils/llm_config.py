@@ -52,15 +52,31 @@ class DeepSeekLLM(dspy.LM):
         
         super().__init__(model=model)
     
-    def basic_request(self, prompt: str, **kwargs) -> Dict[str, Any]:
-        """基础请求方法"""
+    def basic_request(self, prompt: str = None, messages: list = None, **kwargs) -> Dict[str, Any]:
+        """基础请求方法 - 支持 prompt 和 messages"""
         try:
+            # 构建消息
+            if messages:
+                # 已经是 messages 格式
+                if isinstance(messages, list) and len(messages) > 0:
+                    if isinstance(messages[0], dict):
+                        # 已经是正确格式
+                        api_messages = messages
+                    else:
+                        # 转换为消息格式
+                        api_messages = [{"role": "user", "content": str(msg)} for msg in messages]
+                else:
+                    api_messages = [{"role": "user", "content": str(messages)}]
+            else:
+                # 使用 prompt
+                api_messages = [{"role": "user", "content": prompt}]
+            
             response = self.client.chat.completions.create(
                 model=self.model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=api_messages,
                 temperature=kwargs.get("temperature", 0.1),
                 max_tokens=kwargs.get("max_tokens", 2000),
-                **{k: v for k, v in kwargs.items() if k not in ["temperature", "max_tokens"]}
+                **{k: v for k, v in kwargs.items() if k not in ["temperature", "max_tokens", "messages"]}
             )
             
             return {
@@ -80,9 +96,17 @@ class DeepSeekLLM(dspy.LM):
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             }
     
-    def __call__(self, prompt: str, **kwargs) -> str:
-        """调用方法"""
-        response = self.basic_request(prompt, **kwargs)
+    def __call__(self, prompt: str = None, messages: list = None, **kwargs) -> str:
+        """调用方法 - 支持 prompt 和 messages 参数"""
+        if messages:
+            # 直接传递 messages 给 basic_request
+            response = self.basic_request(messages=messages, **kwargs)
+        elif prompt:
+            # 使用 prompt
+            response = self.basic_request(prompt=prompt, **kwargs)
+        else:
+            raise ValueError("Either prompt or messages must be provided")
+        
         return response["choices"][0]["text"]
 
 
@@ -107,9 +131,10 @@ def setup_deepseek_llm(config: Optional[LLMConfig] = None) -> tuple:
     
     # DSPy LLM 配置
     if config.provider.lower() == "deepseek":
-        dspy_lm = DeepSeekLLM(
-            model=config.model_name,
-            api_key=config.api_key,
+        # 使用 DSPy LM 连接 DeepSeek (OpenAI 兼容)
+        dspy_lm = dspy.LM(
+            model=f"openai/{config.model_name}",
+            api_key=config.api_key or os.getenv("DEEPSEEK_API_KEY"),
             base_url=config.base_url or "https://api.deepseek.com/v1",
             temperature=config.temperature,
             max_tokens=config.max_tokens
@@ -127,8 +152,8 @@ def setup_deepseek_llm(config: Optional[LLMConfig] = None) -> tuple:
     
     elif config.provider.lower() == "openai":
         # OpenAI 配置
-        dspy_lm = dspy.OpenAI(
-            model=config.model_name,
+        dspy_lm = dspy.LM(
+            model=f"openai/{config.model_name}",
             api_key=config.api_key,
             temperature=config.temperature,
             max_tokens=config.max_tokens
@@ -143,8 +168,8 @@ def setup_deepseek_llm(config: Optional[LLMConfig] = None) -> tuple:
     
     elif config.provider.lower() == "ollama":
         # Ollama 本地配置
-        dspy_lm = dspy.OllamaLocal(
-            model=config.model_name,
+        dspy_lm = dspy.LM(
+            model=f"ollama/{config.model_name}",
             base_url=config.base_url or "http://localhost:11434"
         )
         

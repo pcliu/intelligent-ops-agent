@@ -6,17 +6,34 @@ from ..dspy_modules.diagnostic_agent import DiagnosticAgent, DiagnosticContext
 from ..dspy_modules.action_planner import ActionPlanner
 from ..dspy_modules.report_generator import ReportGenerator, ExecutionResult
 from .state_manager import OpsState, StateManager
+from ..utils.llm_config import setup_deepseek_llm, get_llm_config_from_env
 
 
 class WorkflowNodes:
     """工作流节点集合"""
     
     def __init__(self):
+        # 初始化 LLM 配置
+        self._setup_llm()
+        
+        # 初始化 DSPy 模块
         self.alert_analyzer = AlertAnalyzer()
         self.diagnostic_agent = DiagnosticAgent()
         self.action_planner = ActionPlanner()
         self.report_generator = ReportGenerator()
         self.state_manager = StateManager()
+    
+    def _setup_llm(self):
+        """设置 LLM 配置"""
+        try:
+            config = get_llm_config_from_env()
+            self.dspy_lm, self.langchain_llm = setup_deepseek_llm(config)
+            print(f"✅ LLM 配置完成: {config.provider} - {config.model_name}")
+        except Exception as e:
+            print(f"⚠️ LLM 配置失败: {e}")
+            # 可以选择使用默认配置或者抛出异常
+            self.dspy_lm = None
+            self.langchain_llm = None
     
     async def monitor_collect_node(self, state: OpsState) -> OpsState:
         """监控数据采集节点"""

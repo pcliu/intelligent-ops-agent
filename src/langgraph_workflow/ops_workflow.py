@@ -50,7 +50,69 @@ class OpsWorkflow:
         
         # 添加条件边
         for node_name, condition_func in conditional_edges.items():
-            if node_name == "error_handling":
+            if node_name == "monitor_collect":
+                workflow.add_conditional_edges(
+                    node_name,
+                    condition_func,
+                    {
+                        "alert_process": "alert_process",
+                        "monitor_collect": "monitor_collect"
+                    }
+                )
+            elif node_name == "alert_process":
+                workflow.add_conditional_edges(
+                    node_name,
+                    condition_func,
+                    {
+                        "diagnosis": "diagnosis",
+                        "error_handling": "error_handling"
+                    }
+                )
+            elif node_name == "diagnosis":
+                workflow.add_conditional_edges(
+                    node_name,
+                    condition_func,
+                    {
+                        "action_plan": "action_plan",
+                        "error_handling": "error_handling"
+                    }
+                )
+            elif node_name == "action_plan":
+                workflow.add_conditional_edges(
+                    node_name,
+                    condition_func,
+                    {
+                        "action_execute": "action_execute",
+                        "error_handling": "error_handling"
+                    }
+                )
+            elif node_name == "action_execute":
+                workflow.add_conditional_edges(
+                    node_name,
+                    condition_func,
+                    {
+                        "report_generate": "report_generate",
+                        "error_handling": "error_handling"
+                    }
+                )
+            elif node_name == "report_generate":
+                workflow.add_conditional_edges(
+                    node_name,
+                    condition_func,
+                    {
+                        "feedback_learn": "feedback_learn",
+                        "error_handling": "error_handling"
+                    }
+                )
+            elif node_name == "feedback_learn":
+                workflow.add_conditional_edges(
+                    node_name,
+                    condition_func,
+                    {
+                        "monitor_collect": "monitor_collect"
+                    }
+                )
+            elif node_name == "error_handling":
                 workflow.add_conditional_edges(
                     node_name,
                     condition_func,
@@ -64,14 +126,6 @@ class OpsWorkflow:
                         "END": END
                     }
                 )
-            else:
-                workflow.add_conditional_edges(
-                    node_name,
-                    condition_func
-                )
-        
-        # 添加直接边
-        workflow.add_edge("feedback_learn", "monitor_collect")
     
     def compile(self):
         """编译工作流图"""
