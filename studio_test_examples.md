@@ -26,7 +26,65 @@ Studio URL: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
 
 ## 📋 测试示例
 
-### 1. 生成报告测试
+### 🚀 新功能：DSPy 智能路由测试
+
+现在智能体支持**自动任务判断**！您无需指定 `current_task`，只需提供相关数据，DSPy 会智能判断应该执行哪种任务。
+
+### 1. 自然语言输入测试
+
+**输入 (字符串)**:
+```json
+"服务器CPU使用率达到90%，请帮我分析一下这个问题"
+```
+
+**预期路由**: `diagnose_issue` 或 `process_alert`
+**预期输出**: 基于自然语言理解的问题分析和建议
+
+---
+
+### 2. 告警处理测试 (简化格式)
+
+**输入 (AlertInfo 格式)**:
+```json
+{
+  "alert_info": {
+    "alert_id": "cpu_high_001",
+    "timestamp": "2025-01-09T10:30:00Z",
+    "severity": "high",
+    "source": "monitoring_system",
+    "message": "CPU usage exceeds 85% for 5 minutes",
+    "metrics": {
+      "cpu_usage": 0.87,
+      "memory_usage": 0.65,
+      "load_average": 3.2
+    },
+    "tags": ["cpu", "performance", "critical"]
+  }
+}
+```
+
+**预期路由**: `process_alert` → `diagnose_issue` → `plan_actions` (连续工作流)
+**预期输出**: 完整的运维处理流程，包括告警分析、问题诊断和行动规划
+
+---
+
+### 3. 症状列表测试
+
+**输入 (症状数组)**:
+```json
+[
+  "数据库连接超时",
+  "API响应缓慢", 
+  "内存使用率持续上升"
+]
+```
+
+**预期路由**: `diagnose_issue`
+**预期输出**: 基于症状的根因分析和诊断结果
+
+---
+
+### 4. 报告生成测试
 
 **输入**:
 ```json
@@ -40,34 +98,12 @@ Studio URL: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
 }
 ```
 
-**预期输出**: 智能体生成的事件报告，包含分析、诊断、行动计划等信息。
+**预期路由**: `generate_report`
+**预期输出**: 智能体生成的事件报告，包含分析、诊断、行动计划等信息
 
 ---
 
-### 2. 告警处理测试
-
-**输入 (AlertInfo 格式)**:
-```json
-{
-  "alert_id": "cpu_high_001",
-  "timestamp": "2025-01-09T10:30:00Z",
-  "severity": "high",
-  "source": "monitoring_system",
-  "message": "CPU usage exceeds 85% for 5 minutes",
-  "metrics": {
-    "cpu_usage": 0.87,
-    "memory_usage": 0.65,
-    "load_average": 3.2
-  },
-  "tags": ["cpu", "performance", "critical"]
-}
-```
-
-**预期输出**: 告警分析结果，包括优先级、分类、紧急程度评分、根因提示和建议行动。
-
----
-
-### 3. 问题诊断测试
+### 5. 问题诊断测试 (带上下文)
 
 **输入**:
 ```json
@@ -99,11 +135,12 @@ Studio URL: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
 }
 ```
 
-**预期输出**: 详细的诊断结果，包括根因分析、置信度、影响评估、受影响组件、业务影响等。
+**预期路由**: `diagnose_issue`
+**预期输出**: 详细的诊断结果，包括根因分析、置信度、影响评估、受影响组件、业务影响等
 
 ---
 
-### 4. 行动规划测试
+### 6. 行动规划测试
 
 **输入**:
 ```json
@@ -125,7 +162,47 @@ Studio URL: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
 }
 ```
 
-**预期输出**: 详细的行动计划，包括执行步骤、风险评估、时间预估、回滚计划等。
+**预期路由**: `plan_actions`
+**预期输出**: 详细的行动计划，包括执行步骤、风险评估、时间预估、回滚计划等
+
+### 7. 反馈学习测试
+
+**输入**:
+```json
+{
+  "feedback": "处理效果很好，问题解决及时",
+  "rating": 5,
+  "comments": "建议增加自动通知功能",
+  "incident_id": "test_001"
+}
+```
+
+**预期路由**: `learn_feedback`
+**预期输出**: 反馈学习结果和系统改进建议
+
+---
+
+## 🧠 DSPy 智能路由说明
+
+### 路由工作原理
+1. **输入分析**: DSPy 分析用户输入的内容和结构
+2. **意图识别**: 使用 Chain-of-Thought 推理判断用户意图
+3. **置信度评估**: 返回 0-1 的置信度分数
+4. **智能回退**: 低置信度时使用规则路由
+
+### 路由决策示例
+- 包含 `alert_info` → `process_alert`
+- 包含 `symptoms` → `diagnose_issue`
+- 包含 `diagnostic_result` → `plan_actions`
+- 包含 `action_plan` → `execute_actions`
+- 包含 `incident_id` 或 `description` → `generate_report`
+- 包含 `feedback` 或 `rating` → `learn_feedback`
+- 自然语言描述 → 基于内容智能判断
+
+### 置信度阈值
+- **> 0.6**: 使用 DSPy 路由结果
+- **≤ 0.6**: 回退到规则路由
+- **异常**: 使用默认路由 (`process_alert`)
 
 ## 🔧 高级测试场景
 
@@ -203,15 +280,22 @@ status
 
 ### ops-agent 图（推荐测试）:
 1. **initialize** - 初始化智能体状态
-2. **route_task** - 根据任务类型路由
-3. **任务执行节点** - 执行具体功能
-   - `process_alert` - 告警处理
-   - `diagnose_issue` - 问题诊断  
-   - `plan_actions` - 行动规划
-   - `execute_actions` - 执行行动
-   - `generate_report` - 生成报告
-   - `learn_feedback` - 学习反馈
+2. **route_task** - ✨ **DSPy 智能路由** - 自动判断任务类型
+3. **连续工作流执行** - 告警处理的完整流程链：
+   - `process_alert` → `diagnose_issue` → `plan_actions` → (`execute_actions`) → (`generate_report`)
+   - 或独立任务：`generate_report`, `learn_feedback`
 4. **finalize** - 完成任务并返回结果
+
+### 🔄 新的连续工作流逻辑：
+- **告警输入** → 自动执行完整的运维流程链
+- **症状输入** → 直接进入诊断阶段，然后继续后续流程
+- **诊断结果输入** → 直接进入行动规划
+- **其他输入** → 执行对应的独立任务
+
+### 🔍 观察要点
+- **route_task 节点**: 查看控制台输出，观察 DSPy 路由决策过程
+- **任务节点**: 查看 DSPy 模块的推理输出
+- **状态变化**: 观察 AgentState 在各节点间的演变
 
 ### ops-workflow 图（完整流程）:
 1. **monitor_collect** - 监控数据收集

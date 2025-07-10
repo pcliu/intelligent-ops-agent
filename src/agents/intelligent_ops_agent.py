@@ -15,6 +15,7 @@ from ..dspy_modules.alert_analyzer import AlertInfo, AlertAnalyzer
 from ..dspy_modules.diagnostic_agent import DiagnosticAgent
 from ..dspy_modules.action_planner import ActionPlanner
 from ..dspy_modules.report_generator import ReportGenerator
+from ..dspy_modules.task_router import TaskRouter, TaskRouterResult
 from ..utils.llm_config import setup_deepseek_llm, get_llm_config_from_env
 
 
@@ -84,28 +85,27 @@ class IntelligentOpsAgent:
     def __init__(self, config: AgentConfig):
         self.config = config
         
-        # 初始化 LLM (DeepSeek)
-        try:
-            llm_config = get_llm_config_from_env()
-            self.dspy_lm, self.langchain_llm = setup_deepseek_llm(llm_config)
-            print(f"✅ LLM 初始化成功: {llm_config.provider} - {llm_config.model_name}")
-        except Exception as e:
-            print(f"⚠️  LLM 初始化失败: {str(e)}")
-            print("   将使用模拟模式运行")
-            self.dspy_lm = None
-            self.langchain_llm = None
+        # 初始化 LLM
+        self._initialize_llm()
         
-        # DSPy 模块
+        # DSPy 模块 (所有模块共享同一个 LLM 实例)
         self.alert_analyzer = AlertAnalyzer()
         self.diagnostic_agent = DiagnosticAgent()
         self.action_planner = ActionPlanner()
         self.report_generator = ReportGenerator()
+        self.task_router = TaskRouter()
         
         # 构建智能体图
         self.graph = self._build_agent_graph()
         self.compiled_graph = None
         
         print(f"✅ 智能体图构建完成: {config.agent_id}")
+    
+    def _initialize_llm(self) -> None:
+        """初始化 LLM，失败时抛出异常"""
+        llm_config = get_llm_config_from_env()
+        self.dspy_lm, self.langchain_llm = setup_deepseek_llm(llm_config)
+        print(f"✅ LLM 初始化成功: {llm_config.provider} - {llm_config.model_name}")
     
     def _build_agent_graph(self) -> StateGraph:
         """构建智能体状态图"""
@@ -145,9 +145,49 @@ class IntelligentOpsAgent:
             }
         )
         
-        # 各个任务节点完成后的路由
-        for task_node in ["process_alert", "diagnose_issue", "plan_actions", 
-                         "execute_actions", "generate_report", "learn_feedback"]:
+        # 连续工作流：告警处理 → 问题诊断 → 行动规划 → 执行行动 → 生成报告
+        agent_graph.add_conditional_edges(
+            "process_alert",
+            self._process_alert_completion_condition,
+            {
+                "diagnose_issue": "diagnose_issue",
+                "finalize": "finalize",
+                "error": "error_handler"
+            }
+        )
+        
+        agent_graph.add_conditional_edges(
+            "diagnose_issue",
+            self._diagnose_completion_condition,
+            {
+                "plan_actions": "plan_actions",
+                "finalize": "finalize", 
+                "error": "error_handler"
+            }
+        )
+        
+        agent_graph.add_conditional_edges(
+            "plan_actions",
+            self._plan_completion_condition,
+            {
+                "execute_actions": "execute_actions",
+                "finalize": "finalize",
+                "error": "error_handler"
+            }
+        )
+        
+        agent_graph.add_conditional_edges(
+            "execute_actions",
+            self._execute_completion_condition,
+            {
+                "generate_report": "generate_report",
+                "finalize": "finalize",
+                "error": "error_handler"
+            }
+        )
+        
+        # 独立任务节点（直接结束）
+        for task_node in ["generate_report", "learn_feedback"]:
             agent_graph.add_conditional_edges(
                 task_node,
                 self._task_completion_condition,
@@ -205,9 +245,16 @@ class IntelligentOpsAgent:
     async def _process_alert_node(self, state: AgentState) -> AgentState:
         """处理告警节点"""
         try:
-            alert_info = state.get("alert_info")
-            if not alert_info:
+            alert_info_dict = state.get("alert_info")
+            if not alert_info_dict:
                 raise ValueError("No alert information provided")
+            
+            # 确保alert_info是AlertInfo对象
+            if isinstance(alert_info_dict, dict):
+                from ..dspy_modules.alert_analyzer import AlertInfo
+                alert_info = AlertInfo(**alert_info_dict)
+            else:
+                alert_info = alert_info_dict
             
             # 分析告警
             # 获取历史告警信息，转换为 AlertInfo 格式
@@ -215,9 +262,16 @@ class IntelligentOpsAgent:
             historical_alerts = []
             for incident in historical_incidents:
                 if isinstance(incident, dict) and "alert_info" in incident:
-                    historical_alerts.append(incident["alert_info"])
+                    incident_alert = incident["alert_info"]
+                    if isinstance(incident_alert, dict):
+                        historical_alerts.append(AlertInfo(**incident_alert))
+                    else:
+                        historical_alerts.append(incident_alert)
             
-            analysis_result = self.alert_analyzer.forward(
+            # 使用 asyncio.to_thread 处理同步的 DSPy 调用
+            import asyncio
+            analysis_result = await asyncio.to_thread(
+                self.alert_analyzer.forward,
                 alert_info=alert_info,
                 historical_alerts=historical_alerts
             )
@@ -253,26 +307,48 @@ class IntelligentOpsAgent:
             from ..dspy_modules.diagnostic_agent import DiagnosticContext
             from ..dspy_modules.alert_analyzer import AlertAnalysisResult
             
-            # 创建模拟告警分析结果
-            alert_analysis = AlertAnalysisResult(
-                alert_id="diagnostic_request",
-                priority="medium",
-                category="investigation",
-                urgency_score=0.5,
-                root_cause_hints=symptoms,
-                recommended_actions=[]
-            )
+            # 使用现有的告警分析结果，或创建基于症状的分析结果
+            analysis_result = state.get("analysis_result")
+            if analysis_result:
+                # 使用告警分析结果
+                alert_info_dict = state.get("alert_info", {})
+                if isinstance(alert_info_dict, dict):
+                    alert_id = alert_info_dict.get("alert_id", "unknown")
+                else:
+                    alert_id = "unknown"
+                    
+                alert_analysis = AlertAnalysisResult(
+                    alert_id=alert_id,
+                    priority=analysis_result.get("priority", "medium"),
+                    category=analysis_result.get("category", "investigation"), 
+                    urgency_score=analysis_result.get("urgency_score", 0.5),
+                    root_cause_hints=analysis_result.get("root_cause_hints", symptoms),
+                    recommended_actions=analysis_result.get("recommended_actions", [])
+                )
+            else:
+                # 基于症状创建分析结果
+                alert_analysis = AlertAnalysisResult(
+                    alert_id="diagnostic_request",
+                    priority="medium",
+                    category="investigation",
+                    urgency_score=0.5,
+                    root_cause_hints=symptoms,
+                    recommended_actions=[]
+                )
             
             diagnostic_context = DiagnosticContext(
                 alert_analysis=alert_analysis,
-                system_metrics=context.get("system_metrics", {}),
-                log_entries=context.get("log_entries", []),
+                system_metrics=context.get("system_metrics", {}) if context else {},
+                log_entries=context.get("log_entries", []) if context else [],
                 historical_incidents=state.get("incident_history", []),
-                topology_info=context.get("topology_info", {})
+                topology_info=context.get("topology_info", {}) if context else {}
             )
             
-            # 执行诊断
-            diagnostic_result = self.diagnostic_agent.forward(diagnostic_context)
+            # 执行诊断 - 使用 asyncio.to_thread 处理同步调用
+            diagnostic_result = await asyncio.to_thread(
+                self.diagnostic_agent.forward,
+                diagnostic_context
+            )
             
             return {
                 **state,
@@ -320,8 +396,13 @@ class IntelligentOpsAgent:
                 evidence=diagnostic_result.get("evidence", [])
             )
             
-            # 生成行动计划
-            action_plan = self.action_planner.forward(diag_result, state.get("context", {}))
+            # 生成行动计划 - 使用 asyncio.to_thread 处理同步调用
+            context = state.get("context") or {}
+            action_plan = await asyncio.to_thread(
+                self.action_planner.forward,
+                diag_result, 
+                context
+            )
             
             return {
                 **state,
@@ -438,10 +519,11 @@ class IntelligentOpsAgent:
                 }
             
             # 生成报告
+            # TODO: 实现 ReportGenerator 的调用
             report = {
                 "incident_id": state.get("workflow_id", "unknown"),
-                "title": f"Agent {state['agent_id']} Task Report",
-                "summary": f"Completed task: {state.get('current_task', 'unknown')}",
+                "title": f"智能运维报告 - {state['agent_id']}",
+                "summary": f"任务完成: {state.get('current_task', 'unknown')}",
                 "timestamp": datetime.now().isoformat(),
                 "agent_id": state["agent_id"],
                 "status": "generated",
@@ -567,25 +649,132 @@ class IntelligentOpsAgent:
     # ==================== 条件函数 ====================
     
     def _route_task_condition(self, state: AgentState) -> str:
-        """任务路由条件"""
+        """智能任务路由条件"""
+        # 1. 优先检查明确指定的任务类型（向后兼容）
         current_task = state.get("current_task")
-        
-        if not current_task:
-            return "error"
-            
-        # 根据任务类型路由
         valid_tasks = ["process_alert", "diagnose_issue", "plan_actions", 
                       "execute_actions", "generate_report", "learn_feedback"]
         
-        if current_task in valid_tasks:
+        if current_task and current_task in valid_tasks:
             return current_task
+        
+        # 2. 使用 DSPy 智能判断任务类型
+        try:
+            # 提取用户输入用于路由判断
+            user_input = self._extract_user_input_for_routing(state)
+            
+            # 执行智能路由 - 在同步上下文中直接调用（路由通常很快）
+            routing_result = self.task_router.forward(user_input)
+            
+            # 检查置信度
+            if routing_result.confidence > 0.6:  # 置信度阈值
+                print(f"🧠 DSPy 智能路由: {routing_result.task_type} (置信度: {routing_result.confidence:.2f})")
+                print(f"   推理过程: {routing_result.reasoning}")
+                return routing_result.task_type
+            else:
+                print(f"⚠️  DSPy 路由置信度不足 ({routing_result.confidence:.2f})，使用规则回退")
+                return self._rule_based_routing(state)
+                
+        except Exception as e:
+            print(f"❌ DSPy 路由失败: {str(e)}，使用规则回退")
+            return self._rule_based_routing(state)
+    
+    def _extract_user_input_for_routing(self, state: AgentState) -> Dict[str, Any]:
+        """提取用户输入用于路由判断"""
+        user_input = {}
+        
+        # 收集所有可能的输入信息
+        if state.get("alert_info"):
+            user_input["alert_info"] = state["alert_info"]
+        
+        if state.get("symptoms"):
+            user_input["symptoms"] = state["symptoms"]
+        
+        if state.get("context"):
+            user_input["context"] = state["context"]
+        
+        if state.get("diagnostic_result"):
+            user_input["diagnostic_result"] = state["diagnostic_result"]
+        
+        if state.get("action_plan"):
+            user_input["action_plan"] = state["action_plan"]
+        
+        # 任务输入中的描述信息
+        task_input = state.get("task_input", {})
+        if isinstance(task_input, dict):
+            user_input.update(task_input)
+        
+        # 工作流ID作为上下文
+        if state.get("workflow_id"):
+            user_input["workflow_id"] = state["workflow_id"]
+        
+        return user_input
+    
+    def _rule_based_routing(self, state: AgentState) -> str:
+        """基于规则的回退路由"""
+        # 根据输入数据结构进行简单推断
+        if state.get("alert_info"):
+            return "process_alert"
+        elif state.get("symptoms"):
+            return "diagnose_issue"
+        elif state.get("diagnostic_result"):
+            return "plan_actions"
+        elif state.get("action_plan"):
+            return "execute_actions"
+        elif state.get("task_input", {}).get("incident_id"):
+            return "generate_report"
+        elif state.get("task_input", {}).get("feedback"):
+            return "learn_feedback"
         else:
-            return "error"
+            # 默认任务：处理告警
+            print("🔄 使用默认任务类型: process_alert")
+            return "process_alert"
     
     def _task_completion_condition(self, state: AgentState) -> str:
         """任务完成条件"""
         if state.get("errors"):
             return "error"
+        else:
+            return "finalize"
+    
+    def _process_alert_completion_condition(self, state: AgentState) -> str:
+        """告警处理完成条件"""
+        if state.get("errors"):
+            return "error"
+        elif state.get("analysis_result"):
+            # 告警分析完成，继续诊断
+            return "diagnose_issue"
+        else:
+            return "finalize"
+    
+    def _diagnose_completion_condition(self, state: AgentState) -> str:
+        """诊断完成条件"""
+        if state.get("errors"):
+            return "error"
+        elif state.get("diagnostic_result"):
+            # 诊断完成，继续规划行动
+            return "plan_actions"
+        else:
+            return "finalize"
+    
+    def _plan_completion_condition(self, state: AgentState) -> str:
+        """行动规划完成条件"""
+        if state.get("errors"):
+            return "error"
+        elif state.get("action_plan") and self.config.auto_execution:
+            # 规划完成且允许自动执行，继续执行
+            return "execute_actions"
+        else:
+            # 规划完成但不自动执行，直接完成
+            return "finalize"
+    
+    def _execute_completion_condition(self, state: AgentState) -> str:
+        """执行完成条件"""
+        if state.get("errors"):
+            return "error"
+        elif state.get("execution_result") and self.config.enable_reporting:
+            # 执行完成且启用报告，生成报告
+            return "generate_report"
         else:
             return "finalize"
     
@@ -600,6 +789,64 @@ class IntelligentOpsAgent:
             return "END"
     
     # ==================== 公共接口 ====================
+    
+    async def process_input(self, user_input: Any) -> Dict[str, Any]:
+        """智能处理用户输入
+        
+        这是主要的公共接口，支持任意格式的输入，自动判断任务类型并处理。
+        
+        Args:
+            user_input: 用户输入，可以是：
+                - 告警信息字典
+                - 症状列表
+                - 自然语言描述
+                - 诊断结果
+                - 行动计划
+                - 任何其他格式
+        
+        Returns:
+            Dict[str, Any]: 处理结果
+        """
+        # 将用户输入标准化为状态参数
+        state_kwargs = self._normalize_user_input(user_input)
+        
+        # 创建初始状态（自动判断任务类型）
+        initial_state = self._create_initial_state(**state_kwargs)
+        
+        # 运行智能体图
+        return await self._run_agent_task(initial_state)
+    
+    def _normalize_user_input(self, user_input: Any) -> Dict[str, Any]:
+        """标准化用户输入为状态参数"""
+        if isinstance(user_input, dict):
+            # 字典格式：检查并补充必要字段
+            normalized = user_input.copy()
+            
+            # 如果包含 alert_info，确保格式正确
+            if "alert_info" in normalized:
+                alert_info = normalized["alert_info"]
+                if isinstance(alert_info, dict):
+                    # 补充缺失的必要字段
+                    if "timestamp" not in alert_info:
+                        alert_info["timestamp"] = datetime.now().isoformat()
+                    if "tags" not in alert_info:
+                        alert_info["tags"] = []
+                    if "metrics" not in alert_info:
+                        alert_info["metrics"] = {}
+            
+            return normalized
+        elif isinstance(user_input, str):
+            # 字符串格式：作为消息处理
+            return {"message": user_input}
+        elif isinstance(user_input, list):
+            # 列表格式：假设是症状列表
+            return {"symptoms": user_input}
+        elif hasattr(user_input, "__dict__"):
+            # 对象格式：转换为字典
+            return user_input.__dict__
+        else:
+            # 其他格式：作为描述
+            return {"description": str(user_input)}
     
     async def process_alert(self, alert: Union[AlertInfo, Dict[str, Any]]) -> Dict[str, Any]:
         """处理告警"""
@@ -678,9 +925,51 @@ class IntelligentOpsAgent:
     
     # ==================== 辅助方法 ====================
     
-    def _create_initial_state(self, task: str, **kwargs) -> AgentState:
-        """创建初始状态"""
+    def _create_initial_state(self, task: Optional[str] = None, **kwargs) -> AgentState:
+        """创建初始状态
+        
+        Args:
+            task: 任务类型，可选。如果不提供，将通过 DSPy 智能路由自动判断
+            **kwargs: 其他状态参数
+        """
         now = datetime.now()
+        
+        # 如果没有指定任务类型，先创建临时状态用于路由判断
+        if not task:
+            # 创建临时状态用于智能路由
+            temp_state = AgentState(
+                agent_id=self.config.agent_id,
+                agent_type=self.config.agent_type,
+                specialization=self.config.specialization,
+                current_task=None,  # 留空，让路由器判断
+                task_input=kwargs,
+                task_output=None,
+                status="idle",
+                stage="input",
+                alert_info=kwargs.get("alert_info"),
+                symptoms=kwargs.get("symptoms"),
+                context=kwargs.get("context"),
+                analysis_result=None,
+                diagnostic_result=kwargs.get("diagnostic_result"),
+                action_plan=kwargs.get("action_plan"),
+                execution_result=None,
+                report=None,
+                incident_history=[],
+                learning_data={},
+                performance_metrics={},
+                errors=[],
+                retry_count=0,
+                max_retries=self.config.max_retries,
+                start_time=now,
+                last_update=now,
+                workflow_id=f"{self.config.agent_id}_auto_{now.strftime('%Y%m%d_%H%M%S')}"
+            )
+            
+            # 使用智能路由判断任务类型
+            task = self._route_task_condition(temp_state)
+            print(f"🎯 自动判断任务类型: {task}")
+        
+        # 创建最终的工作流ID
         workflow_id = f"{self.config.agent_id}_{task}_{now.strftime('%Y%m%d_%H%M%S')}"
         
         return AgentState(
@@ -723,12 +1012,32 @@ class IntelligentOpsAgent:
                 config={"recursion_limit": self.config.max_retries * 5}
             )
             
+            # 检查返回状态
+            if final_state is None:
+                return {
+                    "status": "error",
+                    "error": "智能体图返回空状态",
+                    "timestamp": datetime.now().isoformat()
+                }
+            
             # 返回任务输出
-            return final_state.get("task_output", {
-                "status": "completed",
-                "results": final_state,
-                "timestamp": datetime.now().isoformat()
-            })
+            task_output = final_state.get("task_output")
+            if task_output is None:
+                # 如果没有 task_output，创建一个默认的
+                return {
+                    "status": "completed",
+                    "task_type": final_state.get("current_task", "unknown"),
+                    "results": {
+                        "analysis": final_state.get("analysis_result"),
+                        "diagnosis": final_state.get("diagnostic_result"),
+                        "action_plan": final_state.get("action_plan"),
+                        "execution": final_state.get("execution_result"),
+                        "report": final_state.get("report")
+                    },
+                    "errors": final_state.get("errors", []),
+                    "timestamp": datetime.now().isoformat()
+                }
+            return task_output
             
         except Exception as e:
             return {

@@ -96,6 +96,13 @@ class DeepSeekLLM(dspy.LM):
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             }
     
+    async def agenerate(self, prompt: str = None, messages: list = None, **kwargs) -> str:
+        """异步生成方法"""
+        import asyncio
+        # 将同步调用包装为异步
+        result = await asyncio.to_thread(self.basic_request, prompt, messages, **kwargs)
+        return result["choices"][0]["text"]
+    
     def __call__(self, prompt: str = None, messages: list = None, **kwargs) -> str:
         """调用方法 - 支持 prompt 和 messages 参数"""
         if messages:
