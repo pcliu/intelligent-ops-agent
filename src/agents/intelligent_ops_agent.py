@@ -117,8 +117,9 @@ class IntelligentOpsAgent:
         
         # 添加节点
         agent_graph.add_node("initialize", self._initialize_node)
-        agent_graph.add_node("understand_input", self._understand_input_node)
-        agent_graph.add_node("route_task", self._route_task_node)
+        agent_graph.add_node("understand_and_route", self._understand_and_route_node)
+        # agent_graph.add_node("understand_input", self._understand_input_node)
+        # agent_graph.add_node("route_task", self._route_task_node)
         agent_graph.add_node("process_alert", self._process_alert_node)
         agent_graph.add_node("diagnose_issue", self._diagnose_issue_node)
         agent_graph.add_node("plan_actions", self._plan_actions_node)
@@ -132,12 +133,12 @@ class IntelligentOpsAgent:
         agent_graph.set_entry_point("initialize")
         
         # 添加边
-        agent_graph.add_edge("initialize", "understand_input")
-        agent_graph.add_edge("understand_input", "route_task")
+        agent_graph.add_edge("initialize", "understand_and_route")
+        # agent_graph.add_edge("understand_input", "route_task")
         
         # 条件边：根据任务类型路由
         agent_graph.add_conditional_edges(
-            "route_task",
+            "understand_and_route",
             self._route_task_condition,
             {
                 "process_alert": "process_alert",
@@ -207,7 +208,7 @@ class IntelligentOpsAgent:
             "error_handler",
             self._error_recovery_condition,
             {
-                "retry": "route_task",
+                "retry": "understand_and_route",
                 "finalize": "finalize",
                 "END": END
             }
@@ -237,148 +238,78 @@ class IntelligentOpsAgent:
             "last_update": datetime.now()
         }
     
-    async def _understand_input_node(self, state: ChatState) -> ChatState:
-        """自然语言理解节点"""
+    async def _understand_and_route_node(self, state: ChatState) -> ChatState:
+        """合并节点：自然语言理解 + 任务路由"""
         try:
-            # 从消息中提取原始输入
+            # ==================== Part 1: 自然语言理解 ====================
             messages = state.get("messages", [])
-            if not messages:
-                return {
-                    **state,
-                    "stage": "input_understood",
-                    "last_update": datetime.now()
-                }
-            
-            # 获取最后一条用户消息
-            last_message = messages[-1]
-            
-            # 处理不同类型的消息内容
-            if hasattr(last_message, 'content'):
-                content = last_message.content
-                # 如果 content 是列表（如包含 text 对象），提取文本
-                if isinstance(content, list):
-                    raw_input = ""
-                    for item in content:
-                        if isinstance(item, dict) and 'text' in item:
-                            raw_input += item['text']
-                        elif isinstance(item, str):
-                            raw_input += item
-                elif isinstance(content, str):
-                    raw_input = content
-                else:
-                    raw_input = str(content)
-            else:
-                raw_input = None
-            
-            if not raw_input or not raw_input.strip():
-                return {
-                    **state,
-                    "stage": "input_understood", 
-                    "last_update": datetime.now()
-                }
-            
-            print(f"🧠 开始自然语言理解: {raw_input[:50]}...")
-            
-            # 使用 NLU 模块处理输入
-            nlu_result = await asyncio.to_thread(self.nlu.forward, raw_input)
-            
-            # 更新状态
-            updated_state = {
-                **state,
-                "stage": "input_understood",
-                "parsed_intent": nlu_result.intent,
-                "nlu_confidence": nlu_result.confidence,
-                "nlu_reasoning": nlu_result.reasoning,
-                "extracted_info": nlu_result.extracted_info,
-                "last_update": datetime.now()
-            }
-            
-            # 如果 NLU 提取了告警信息，更新 alert_info
-            if nlu_result.alert_info:
-                # 转换为 AlertInfo 对象
-                alert_info = AlertInfo(**nlu_result.alert_info)
-                updated_state["alert_info"] = alert_info
-                print(f"📊 提取到告警信息: {alert_info.message}")
-            
-            # 如果 NLU 提取了症状，更新 symptoms
-            if nlu_result.symptoms:
-                updated_state["symptoms"] = nlu_result.symptoms
-                print(f"🔍 提取到症状: {nlu_result.symptoms}")
-            
-            # 如果 NLU 提取了上下文，更新 context
-            if nlu_result.context:
-                existing_context = state.get("context", {}) or {}
-                updated_state["context"] = {**existing_context, **nlu_result.context}
-                print(f"📋 提取到上下文: {nlu_result.context}")
-            
-            print(f"✅ 自然语言理解完成 - 意图: {nlu_result.intent}, 置信度: {nlu_result.confidence:.2f}")
-            
-            return updated_state
-            
-        except Exception as e:
-            return self._create_error_state(state, e, "understand_input")
-    
-    async def _route_task_node(self, state: ChatState) -> ChatState:
-        """任务路由节点 - 智能决策执行路径"""
-        try:
-            print("🎯 开始任务路由...")
-            
-            # 1. 检查是否有明确指定的任务类型（向后兼容）
-            current_task = state.get("current_task")
-            valid_tasks = ["process_alert", "diagnose_issue", "plan_actions", 
-                          "execute_actions", "generate_report", "learn_feedback"]
-            
-            if current_task and current_task in valid_tasks:
-                self._log_routing_decision("explicit", current_task)
-                return {
-                    **state,
-                    "stage": "routing",
-                    "current_task": current_task,
-                    "routing_method": "explicit",
-                    "last_update": datetime.now()
-                }
-            
-            # 2. 尝试使用 NLU 结果进行智能路由
-            nlu_intent = state.get("parsed_intent")
-            nlu_confidence = state.get("nlu_confidence", 0.0)
-            
-            if nlu_intent and nlu_confidence > 0.6:
-                # 将 NLU 意图映射到具体任务
-                task_mapping = {
-                    "process_alert": "process_alert",
-                    "diagnose_issue": "diagnose_issue", 
-                    "plan_actions": "plan_actions",
-                    "execute_actions": "execute_actions",
-                    "generate_report": "generate_report",
-                    "learn_feedback": "learn_feedback"
-                }
+            raw_input = None
+            if messages:
+                last_message = messages[-1]
+                if hasattr(last_message, 'content'):
+                    content = last_message.content
+                    if isinstance(content, list):
+                        raw_input = "".join(item['text'] if isinstance(item, dict) and 'text' in item else str(item) for item in content)
+                    else:
+                        raw_input = str(content)
+
+            current_state = state
+            if raw_input and raw_input.strip():
+                print(f"🧠 开始自然语言理解: {raw_input[:50]}...")
+                nlu_result = await asyncio.to_thread(self.nlu.forward, raw_input)
                 
-                mapped_task = task_mapping.get(nlu_intent, nlu_intent)
+                updated_state_from_nlu = {
+                    "parsed_intent": nlu_result.intent,
+                    "nlu_confidence": nlu_result.confidence,
+                    "nlu_reasoning": nlu_result.reasoning,
+                    "extracted_info": nlu_result.extracted_info,
+                }
+                if nlu_result.alert_info:
+                    updated_state_from_nlu["alert_info"] = AlertInfo(**nlu_result.alert_info)
+                    print(f"📊 提取到告警信息: {updated_state_from_nlu['alert_info'].message}")
+                if nlu_result.symptoms:
+                    updated_state_from_nlu["symptoms"] = nlu_result.symptoms
+                    print(f"🔍 提取到症状: {nlu_result.symptoms}")
+                if nlu_result.context:
+                    existing_context = state.get("context", {}) or {}
+                    updated_state_from_nlu["context"] = {**existing_context, **nlu_result.context}
+                    print(f"📋 提取到上下文: {nlu_result.context}")
+
+                current_state = {**state, **updated_state_from_nlu}
+                print(f"✅ 自然语言理解完成 - 意图: {nlu_result.intent}, 置信度: {nlu_result.confidence:.2f}")
+
+            # ==================== Part 2: 任务路由 ====================
+            print("🎯 开始任务路由...")
+            valid_tasks = ["process_alert", "diagnose_issue", "plan_actions", 
+                           "execute_actions", "generate_report", "learn_feedback"]
+
+            # 1. 检查是否有明确指定的任务类型
+            if current_state.get("current_task") in valid_tasks:
+                self._log_routing_decision("explicit", current_state["current_task"])
+                return {**current_state, "stage": "routing", "routing_method": "explicit", "last_update": datetime.now()}
+
+            # 2. 使用 NLU 结果路由
+            nlu_intent = current_state.get("parsed_intent")
+            nlu_confidence = current_state.get("nlu_confidence", 0.0)
+            if nlu_intent and nlu_confidence > 0.6:
+                task_mapping = {
+                    "process_alert": "process_alert", "diagnose_issue": "diagnose_issue",
+                    "plan_actions": "plan_actions", "execute_actions": "execute_actions",
+                    "generate_report": "generate_report", "learn_feedback": "learn_feedback"
+                }
+                mapped_task = task_mapping.get(nlu_intent)
                 if mapped_task in valid_tasks:
                     self._log_routing_decision("nlu", mapped_task, nlu_confidence)
-                    return {
-                        **state,
-                        "stage": "routing",
-                        "current_task": mapped_task,
-                        "routing_method": "nlu",
-                        "routing_confidence": nlu_confidence,
-                        "last_update": datetime.now()
-                    }
-            
+                    return {**current_state, "stage": "routing", "current_task": mapped_task, "routing_method": "nlu", "last_update": datetime.now()}
+
             # 3. 使用 DSPy 智能路由作为备选
             try:
-                # 提取用户输入用于路由判断
-                user_input = self._extract_user_input_for_routing(state)
-                
-                # 执行智能路由
+                user_input = self._extract_user_input_for_routing(current_state)
                 routing_result = await asyncio.to_thread(self.task_router.forward, user_input)
-                
-                # 检查置信度
                 if routing_result.confidence > 0.6:
-                    self._log_routing_decision("dspy", routing_result.task_type, 
-                                             routing_result.confidence, routing_result.reasoning)
+                    self._log_routing_decision("dspy", routing_result.task_type, routing_result.confidence, routing_result.reasoning)
                     return {
-                        **state,
+                        **current_state,
                         "stage": "routing",
                         "current_task": routing_result.task_type,
                         "routing_method": "dspy",
@@ -388,33 +319,24 @@ class IntelligentOpsAgent:
                     }
                 else:
                     print(f"⚠️ DSPy 路由置信度不足 ({routing_result.confidence:.2f})")
-                    
             except Exception as e:
                 print(f"❌ DSPy 路由失败: {str(e)}")
-                print(f"🔍 DSPy 错误详情: {repr(e)}")
-                # 记录 DSPy 路由失败信息到状态中
-                current_errors = state.get("errors", [])
+                current_errors = current_state.get("errors", [])
                 current_errors.append(f"DSPy routing failed: {str(e)}")
-            
+
             # 4. 回退到基于规则的路由
-            rule_based_task = self._rule_based_routing(state)
+            rule_based_task = self._rule_based_routing(current_state)
             self._log_routing_decision("rule_based", rule_based_task)
-            
             return {
-                **state,
+                **current_state,
                 "stage": "routing",
                 "current_task": rule_based_task,
                 "routing_method": "rule_based",
                 "last_update": datetime.now()
             }
-            
+
         except Exception as e:
-            context = {
-                "current_task": state.get("current_task"),
-                "parsed_intent": state.get("parsed_intent"),
-                "nlu_confidence": state.get("nlu_confidence")
-            }
-            return self._create_error_state(state, e, "route_task", context)
+            return self._create_error_state(state, e, "understand_and_route")
     
     async def _process_alert_node(self, state: ChatState) -> ChatState:
         """处理告警节点"""
