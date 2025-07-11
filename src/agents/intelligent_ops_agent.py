@@ -316,21 +316,105 @@ class IntelligentOpsAgent:
             return updated_state
             
         except Exception as e:
-            print(f"❌ 自然语言理解失败: {str(e)}")
-            return {
-                **state,
-                "stage": "error",
-                "errors": state.get("errors", []) + [f"NLU error: {str(e)}"],
-                "last_update": datetime.now()
-            }
+            return self._create_error_state(state, e, "understand_input")
     
     async def _route_task_node(self, state: ChatState) -> ChatState:
-        """任务路由节点"""
-        return {
-            **state,
-            "stage": "routing",
-            "last_update": datetime.now()
-        }
+        """任务路由节点 - 智能决策执行路径"""
+        try:
+            print("🎯 开始任务路由...")
+            
+            # 1. 检查是否有明确指定的任务类型（向后兼容）
+            current_task = state.get("current_task")
+            valid_tasks = ["process_alert", "diagnose_issue", "plan_actions", 
+                          "execute_actions", "generate_report", "learn_feedback"]
+            
+            if current_task and current_task in valid_tasks:
+                self._log_routing_decision("explicit", current_task)
+                return {
+                    **state,
+                    "stage": "routing",
+                    "current_task": current_task,
+                    "routing_method": "explicit",
+                    "last_update": datetime.now()
+                }
+            
+            # 2. 尝试使用 NLU 结果进行智能路由
+            nlu_intent = state.get("parsed_intent")
+            nlu_confidence = state.get("nlu_confidence", 0.0)
+            
+            if nlu_intent and nlu_confidence > 0.6:
+                # 将 NLU 意图映射到具体任务
+                task_mapping = {
+                    "process_alert": "process_alert",
+                    "diagnose_issue": "diagnose_issue", 
+                    "plan_actions": "plan_actions",
+                    "execute_actions": "execute_actions",
+                    "generate_report": "generate_report",
+                    "learn_feedback": "learn_feedback"
+                }
+                
+                mapped_task = task_mapping.get(nlu_intent, nlu_intent)
+                if mapped_task in valid_tasks:
+                    self._log_routing_decision("nlu", mapped_task, nlu_confidence)
+                    return {
+                        **state,
+                        "stage": "routing",
+                        "current_task": mapped_task,
+                        "routing_method": "nlu",
+                        "routing_confidence": nlu_confidence,
+                        "last_update": datetime.now()
+                    }
+            
+            # 3. 使用 DSPy 智能路由作为备选
+            try:
+                # 提取用户输入用于路由判断
+                user_input = self._extract_user_input_for_routing(state)
+                
+                # 执行智能路由
+                routing_result = await asyncio.to_thread(self.task_router.forward, user_input)
+                
+                # 检查置信度
+                if routing_result.confidence > 0.6:
+                    self._log_routing_decision("dspy", routing_result.task_type, 
+                                             routing_result.confidence, routing_result.reasoning)
+                    return {
+                        **state,
+                        "stage": "routing",
+                        "current_task": routing_result.task_type,
+                        "routing_method": "dspy",
+                        "routing_confidence": routing_result.confidence,
+                        "routing_reasoning": routing_result.reasoning,
+                        "last_update": datetime.now()
+                    }
+                else:
+                    print(f"⚠️ DSPy 路由置信度不足 ({routing_result.confidence:.2f})")
+                    
+            except Exception as e:
+                print(f"❌ DSPy 路由失败: {str(e)}")
+                print(f"🔍 DSPy 错误详情: {repr(e)}")
+                # 记录 DSPy 路由失败信息到状态中
+                current_errors = state.get("errors", [])
+                current_errors.append(f"DSPy routing failed: {str(e)}")
+            
+            # 4. 回退到基于规则的路由
+            rule_based_task = self._rule_based_routing(state)
+            self._log_routing_decision("rule_based", rule_based_task)
+            
+            return {
+                **state,
+                "stage": "routing",
+                "current_task": rule_based_task,
+                "routing_method": "rule_based",
+                "last_update": datetime.now()
+            }
+            
+        except Exception as e:
+            context = {
+                "current_task": state.get("current_task"),
+                "parsed_intent": state.get("parsed_intent"),
+                "nlu_confidence": state.get("nlu_confidence")
+            }
+            return self._create_error_state(state, e, "route_task", context)
     
     async def _process_alert_node(self, state: ChatState) -> ChatState:
         """处理告警节点"""
@@ -784,38 +868,56 @@ class IntelligentOpsAgent:
             "last_update": datetime.now()
         }
     
+    # ==================== 辅助函数 ====================
+    
+    def _create_error_state(self, state: ChatState, error: Exception, node_name: str, 
+                           context: Dict[str, Any] = None) -> ChatState:
+        """创建标准化的错误状态"""
+        error_msg = f"{node_name} error: {str(error)}"
+        print(f"❌ {node_name} 失败: {error_msg}")
+        print(f"🔍 错误详情: {repr(error)}")
+        
+        error_details = {
+            "node": node_name,
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if context:
+            error_details["context"] = context
+        
+        return {
+            **state,
+            "stage": "error",
+            "errors": state.get("errors", []) + [error_msg],
+            "error_details": error_details,
+            "last_update": datetime.now()
+        }
+    
+    def _log_routing_decision(self, method: str, task: str, confidence: float = None, 
+                             reasoning: str = None):
+        """记录路由决策日志"""
+        log_msg = f"🎯 路由决策: {method} → {task}"
+        if confidence is not None:
+            log_msg += f" (置信度: {confidence:.2f})"
+        print(log_msg)
+        
+        if reasoning:
+            print(f"💭 推理过程: {reasoning}")
+    
     # ==================== 条件函数 ====================
     
     def _route_task_condition(self, state: ChatState) -> str:
-        """智能任务路由条件"""
-        # 1. 优先检查明确指定的任务类型（向后兼容）
+        """智能任务路由条件 - 简化版本，仅返回路由结果"""
+        # 路由逻辑已经在 _route_task_node 中实现
+        # 这里只需要返回 current_task 字段的值
         current_task = state.get("current_task")
-        valid_tasks = ["process_alert", "diagnose_issue", "plan_actions", 
-                      "execute_actions", "generate_report", "learn_feedback"]
-        
-        if current_task and current_task in valid_tasks:
+        if current_task:
             return current_task
         
-        # 2. 使用 DSPy 智能判断任务类型
-        try:
-            # 提取用户输入用于路由判断
-            user_input = self._extract_user_input_for_routing(state)
-            
-            # 执行智能路由 - 在同步上下文中直接调用（路由通常很快）
-            routing_result = self.task_router.forward(user_input)
-            
-            # 检查置信度
-            if routing_result.confidence > 0.6:  # 置信度阈值
-                print(f"🧠 DSPy 智能路由: {routing_result.task_type} (置信度: {routing_result.confidence:.2f})")
-                print(f"   推理过程: {routing_result.reasoning}")
-                return routing_result.task_type
-            else:
-                print(f"⚠️  DSPy 路由置信度不足 ({routing_result.confidence:.2f})，使用规则回退")
-                return self._rule_based_routing(state)
-                
-        except Exception as e:
-            print(f"❌ DSPy 路由失败: {str(e)}，使用规则回退")
-            return self._rule_based_routing(state)
+        # 默认回退
+        return "process_alert"
     
     def _extract_user_input_for_routing(self, state: ChatState) -> Dict[str, Any]:
         """提取用户输入用于路由判断"""
