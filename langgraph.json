@@ -1,7 +1,6 @@
 {
   "dependencies": ["./src"],
   "graphs": {
-    "ops-workflow": "./src/langgraph_workflow/ops_workflow_studio.py:graph",
     "ops-agent": "./src/agents/intelligent_ops_agent.py:graph"
   },
   "env": ".env"

@@ -94,23 +94,6 @@ Chat UI 将在 `http://localhost:3000` 启动。
 用户输入 -> Agent Chat UI -> LangGraph Server -> 智能运维工作流 -> 响应返回
 ```
 
-### 关键组件
-
-1. **LangGraph Server** (`src/langgraph_workflow/server.py`)
-   - 处理消息路由和格式转换
-   - 集成现有的 DSPy 模块化推理
-   - 管理工作流状态
-
-2. **消息处理器** (`MessageProcessor`)
-   - 用户意图识别
-   - 告警信息提取
-   - 响应格式化
-
-3. **运维代理** (`OpsAgent`)
-   - 聊天节点处理
-   - 工作流执行
-   - 状态管理
-
 ## 支持的交互功能
 
 ### 📊 告警分析
@@ -147,37 +130,6 @@ Chat UI 将在 `http://localhost:3000` 启动。
       CPU使用率: 75%
       内存使用率: 60%
       工作流状态: active
-```
-
-## 高级配置
-
-### 自定义响应格式
-
-编辑 `src/langgraph_workflow/server.py` 中的 `format_ops_response` 方法：
-
-```python
-def format_ops_response(self, ops_state: OpsState, response_type: str) -> str:
-    # 添加自定义响应格式
-    if response_type == "custom_analysis":
-        return "自定义分析结果..."
-```
-
-### 添加新的意图识别
-
-在 `_analyze_intent` 方法中添加新的关键词：
-
-```python
-elif any(keyword in message_lower for keyword in ["性能", "performance"]):
-    return "performance_analysis"
-```
-
-### 流式响应
-
-启用流式响应以获得更好的用户体验：
-
-```python
-class OpsAgentState(MessagesState):
-    streaming_mode: bool = True
 ```
 
 ## 生产部署
@@ -219,13 +171,7 @@ langgraph deploy --config langgraph.json
    cat langgraph.json
    ```
 
-2. **模块导入错误**
-   ```bash
-   # 确保使用绝对导入
-   from src.langgraph_workflow.ops_workflow import OpsWorkflow
-   ```
-
-3. **Chat UI 连接失败**
+2. **Chat UI 连接失败**
    ```bash
    # 检查 LANGGRAPH_API_URL 配置
    echo $LANGGRAPH_API_URL
