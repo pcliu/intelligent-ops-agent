@@ -188,8 +188,13 @@ def setup_deepseek_llm(config: Optional[LLMConfig] = None) -> tuple:
     else:
         raise ValueError(f"Unsupported LLM provider: {config.provider}")
     
-    # 设置 DSPy 默认 LM
-    dspy.settings.configure(lm=dspy_lm)
+    # 设置 DSPy 默认 LM (只在未配置时配置)
+    try:
+        if not hasattr(dspy.settings, 'lm') or dspy.settings.lm is None:
+            dspy.settings.configure(lm=dspy_lm)
+    except RuntimeError:
+        # 如果已经在其他线程配置过，忽略错误
+        pass
     
     return dspy_lm, langchain_llm
 
