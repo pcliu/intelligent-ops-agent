@@ -5,7 +5,7 @@
 """
 
 import asyncio
-from typing import Dict, Any, List, Optional, Union, Annotated
+from typing import Dict, Any, List, Optional, Annotated
 from datetime import datetime
 from dataclasses import dataclass
 from typing_extensions import TypedDict
@@ -13,11 +13,13 @@ from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
+from langchain_core.tools import tool
+from langgraph.prebuilt import interrupt
 from src.dspy_modules.alert_analyzer import AlertInfo, AlertAnalyzer
 from src.dspy_modules.diagnostic_agent import DiagnosticAgent
 from src.dspy_modules.action_planner import ActionPlanner
-from src.dspy_modules.report_generator import ReportGenerator
 from src.dspy_modules.task_router import TaskRouter
+from src.dspy_modules.report_generator import ReportGenerator
 from src.dspy_modules.natural_language_understanding import NaturalLanguageUnderstanding
 from src.utils.llm_config import setup_deepseek_llm, get_llm_config_from_env
 
@@ -30,52 +32,99 @@ class AgentConfig:
     specialization: Optional[str] = None
     max_retries: int = 3
     timeout: int = 300
-    enable_learning: bool = True
     enable_reporting: bool = True
     auto_execution: bool = False
 
 
 class ChatState(TypedDict):
-    """智能运维智能体统一状态 - 支持聊天模式和任务模式"""
+    """智能运维智能体核心状态 - 仅包含跨节点必需的数据"""
     # LangGraph 标准聊天字段
     messages: Annotated[List[BaseMessage], add_messages]  # 聊天消息列表
     
-    # 智能运维业务字段
+    # 跨节点业务数据
     alert_info: Optional[AlertInfo]  # 告警信息
     symptoms: Optional[List[str]]  # 症状列表
     context: Optional[Dict[str, Any]]  # 上下文信息
+    extracted_info: Optional[Dict[str, Any]]  # 从自然语言中提取的结构化信息
+    
+    # 节点间传递的成果
     analysis_result: Optional[Dict[str, Any]]  # 告警分析结果
     diagnostic_result: Optional[Dict[str, Any]]  # 诊断结果
     action_plan: Optional[Dict[str, Any]]  # 行动计划
     execution_result: Optional[Dict[str, Any]]  # 执行结果
     report: Optional[Dict[str, Any]]  # 报告
     
-    # 自然语言理解相关字段
-    raw_input: Optional[str]  # 原始用户输入
-    parsed_intent: Optional[str]  # 解析的用户意图
-    extracted_info: Optional[Dict[str, Any]]  # 从自然语言中提取的结构化信息
-    nlu_confidence: Optional[float]  # 自然语言理解的置信度
-    nlu_reasoning: Optional[str]  # 自然语言理解的推理过程
-    
-    # 处理状态字段
+    # 工作流控制
     current_task: Optional[str]  # 当前任务类型
-    status: Optional[str]  # 处理状态：idle, processing, completed, failed
-    stage: Optional[str]  # 处理阶段：input, analyze, execute, output
     errors: Optional[List[str]]  # 错误列表
+    workflow_id: Optional[str]  # 工作流标识
+
+
+# ==================== 人类干预工具 ====================
+
+@tool
+def request_operator_input(query: str, context: dict = None) -> str:
+    """请求运维人员输入和确认
     
-    # 智能体基本信息
-    agent_id: Optional[str]
-    agent_type: Optional[str]
-    specialization: Optional[str]
+    Args:
+        query: 向运维人员提出的问题或请求
+        context: 相关上下文信息
+        
+    Returns:
+        str: 运维人员的回复
+    """
+    interrupt_data = {
+        "query": query,
+        "context": context or {},
+        "timestamp": datetime.now().isoformat(),
+        "type": "operator_input"
+    }
+    human_response = interrupt(interrupt_data)
+    return human_response.get("response", "")
+
+
+@tool  
+def request_execution_approval(action_plan: dict) -> str:
+    """请求执行审批
     
-    # 历史和学习
-    incident_history: Optional[List[Dict[str, Any]]]
-    learning_data: Optional[Dict[str, Any]]
+    Args:
+        action_plan: 需要审批的行动计划
+        
+    Returns:
+        str: 审批决策 (approved/rejected/modified)
+    """
+    approval_data = {
+        "action_plan": action_plan,
+        "query": "请审批以下执行计划",
+        "timestamp": datetime.now().isoformat(),
+        "type": "execution_approval"
+    }
+    human_response = interrupt(approval_data)
+    return human_response.get("decision", "rejected")
+
+
+@tool
+def request_clarification(ambiguous_input: str, context: dict = None) -> str:
+    """请求意图澄清
     
-    # 元数据
-    start_time: Optional[datetime]
-    last_update: Optional[datetime]
-    workflow_id: Optional[str]
+    Args:
+        ambiguous_input: 需要澄清的模糊输入
+        context: 相关上下文
+        
+    Returns:
+        str: 澄清后的明确指令
+    """
+    clarification_data = {
+        "ambiguous_input": ambiguous_input,
+        "context": context or {},
+        "query": "请澄清您的具体意图",
+        "timestamp": datetime.now().isoformat(),
+        "type": "clarification"
+    }
+    human_response = interrupt(clarification_data)
+    return human_response.get("clarification", "")
+
+
 
 
 class IntelligentOpsAgent:
@@ -94,9 +143,14 @@ class IntelligentOpsAgent:
         self.alert_analyzer = AlertAnalyzer()
         self.diagnostic_agent = DiagnosticAgent()
         self.action_planner = ActionPlanner()
-        self.report_generator = ReportGenerator()
         self.task_router = TaskRouter()
+        self.report_generator = ReportGenerator()
         self.nlu = NaturalLanguageUnderstanding()
+        
+        # 人类干预工具
+        self.request_operator_input = request_operator_input
+        self.request_execution_approval = request_execution_approval
+        self.request_clarification = request_clarification
         
         # 构建智能体图
         self.graph = self._build_agent_graph()
@@ -125,7 +179,6 @@ class IntelligentOpsAgent:
         agent_graph.add_node("plan_actions", self._plan_actions_node)
         agent_graph.add_node("execute_actions", self._execute_actions_node)
         agent_graph.add_node("generate_report", self._generate_report_node)
-        agent_graph.add_node("learn_feedback", self._learn_feedback_node)
         agent_graph.add_node("finalize", self._finalize_node)
         agent_graph.add_node("error_handler", self._error_handler_node)
         
@@ -146,7 +199,6 @@ class IntelligentOpsAgent:
                 "plan_actions": "plan_actions",
                 "execute_actions": "execute_actions",
                 "generate_report": "generate_report",
-                "learn_feedback": "learn_feedback",
                 "error": "error_handler"
             }
         )
@@ -158,7 +210,8 @@ class IntelligentOpsAgent:
             {
                 "diagnose_issue": "diagnose_issue",
                 "finalize": "finalize",
-                "error": "error_handler"
+                "error": "error_handler",
+                "understand_and_route": "understand_and_route"
             }
         )
         
@@ -168,7 +221,8 @@ class IntelligentOpsAgent:
             {
                 "plan_actions": "plan_actions",
                 "finalize": "finalize", 
-                "error": "error_handler"
+                "error": "error_handler",
+                "understand_and_route": "understand_and_route"
             }
         )
         
@@ -178,7 +232,8 @@ class IntelligentOpsAgent:
             {
                 "execute_actions": "execute_actions",
                 "finalize": "finalize",
-                "error": "error_handler"
+                "error": "error_handler",
+                "understand_and_route": "understand_and_route"
             }
         )
         
@@ -188,18 +243,20 @@ class IntelligentOpsAgent:
             {
                 "generate_report": "generate_report",
                 "finalize": "finalize",
-                "error": "error_handler"
+                "error": "error_handler",
+                "understand_and_route": "understand_and_route"
             }
         )
         
         # 独立任务节点（直接结束）
-        for task_node in ["generate_report", "learn_feedback"]:
+        for task_node in ["generate_report"]:
             agent_graph.add_conditional_edges(
                 task_node,
                 self._task_completion_condition,
                 {
                     "finalize": "finalize",
-                    "error": "error_handler"
+                    "error": "error_handler",
+                    "understand_and_route": "understand_and_route"
                 }
             )
         
@@ -219,10 +276,16 @@ class IntelligentOpsAgent:
         
         return agent_graph
     
-    def compile(self):
-        """编译智能体图"""
+    def compile(self, checkpointer=None):
+        """编译智能体图，支持checkpointer"""
         if not self.compiled_graph:
-            self.compiled_graph = self.graph.compile()
+            compile_kwargs = {}
+            if checkpointer:
+                compile_kwargs["checkpointer"] = checkpointer
+                # 可选：添加静态断点
+                compile_kwargs["interrupt_before"] = ["execute_actions"]
+            
+            self.compiled_graph = self.graph.compile(**compile_kwargs)
         return self.compiled_graph
         
     # ==================== 节点函数 ====================
@@ -231,37 +294,46 @@ class IntelligentOpsAgent:
         """初始化节点 - 设置处理状态"""
         return {
             **state,
-            "agent_id": self.config.agent_id,
-            "stage": "initialize",
-            "status": "processing",
-            "workflow_id": f"{self.config.agent_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-            "last_update": datetime.now()
+            "workflow_id": f"{self.config.agent_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         }
     
     async def _understand_and_route_node(self, state: ChatState) -> ChatState:
-        """合并节点：自然语言理解 + 任务路由"""
+        """合并节点：自然语言理解 + 任务路由 - 支持用户打断"""
         try:
             # ==================== Part 1: 自然语言理解 ====================
-            messages = state.get("messages", [])
-            raw_input = None
-            if messages:
-                last_message = messages[-1]
-                if hasattr(last_message, 'content'):
-                    content = last_message.content
-                    if isinstance(content, list):
-                        raw_input = "".join(item['text'] if isinstance(item, dict) and 'text' in item else str(item) for item in content)
-                    else:
-                        raw_input = str(content)
-
+            user_input = self._get_latest_user_input(state)
+            
             current_state = state
-            if raw_input and raw_input.strip():
-                print(f"🧠 开始自然语言理解: {raw_input[:50]}...")
-                nlu_result = await asyncio.to_thread(self.nlu.forward, raw_input)
+            if user_input and user_input.strip():
+                print(f"🧠 开始自然语言理解: {user_input[:50]}...")
+                nlu_result = await asyncio.to_thread(self.nlu.forward, user_input)
                 
+                # 如果NLU置信度很低，主动请求澄清
+                if nlu_result.confidence < 0.5:
+                    clarification = await asyncio.to_thread(
+                        self.request_clarification,
+                        user_input,
+                        {
+                            "low_confidence_nlu": True,
+                            "original_input": user_input,
+                            "current_stage": state.get("stage", "unknown"),
+                            "confidence": nlu_result.confidence
+                        }
+                    )
+                    
+                    if clarification and clarification.strip():
+                        # 将澄清信息添加到消息中并重新处理
+                        from langchain_core.messages import HumanMessage
+                        new_message = HumanMessage(content=clarification)
+                        
+                        # 更新消息列表
+                        state["messages"] = state.get("messages", []) + [new_message]
+                        
+                        # 重新进行 NLU
+                        nlu_result = await asyncio.to_thread(self.nlu.forward, clarification)
+                
+                # 直接将NLU结果转换为最终current_task，不存储临时意图字段
                 updated_state_from_nlu = {
-                    "parsed_intent": nlu_result.intent,
-                    "nlu_confidence": nlu_result.confidence,
-                    "nlu_reasoning": nlu_result.reasoning,
                     "extracted_info": nlu_result.extracted_info,
                 }
                 if nlu_result.alert_info:
@@ -275,64 +347,52 @@ class IntelligentOpsAgent:
                     updated_state_from_nlu["context"] = {**existing_context, **nlu_result.context}
                     print(f"📋 提取到上下文: {nlu_result.context}")
 
-                current_state = {**state, **updated_state_from_nlu}
-                print(f"✅ 自然语言理解完成 - 意图: {nlu_result.intent}, 置信度: {nlu_result.confidence:.2f}")
-
-            # ==================== Part 2: 任务路由 ====================
-            print("🎯 开始任务路由...")
-            valid_tasks = ["process_alert", "diagnose_issue", "plan_actions", 
-                           "execute_actions", "generate_report", "learn_feedback"]
-
-            # 1. 检查是否有明确指定的任务类型
-            if current_state.get("current_task") in valid_tasks:
-                self._log_routing_decision("explicit", current_state["current_task"])
-                return {**current_state, "stage": "routing", "routing_method": "explicit", "last_update": datetime.now()}
-
-            # 2. 使用 NLU 结果路由
-            nlu_intent = current_state.get("parsed_intent")
-            nlu_confidence = current_state.get("nlu_confidence", 0.0)
-            if nlu_intent and nlu_confidence > 0.6:
+                # 直接转换意图为任务，无需中间状态
                 task_mapping = {
                     "process_alert": "process_alert", "diagnose_issue": "diagnose_issue",
                     "plan_actions": "plan_actions", "execute_actions": "execute_actions",
-                    "generate_report": "generate_report", "learn_feedback": "learn_feedback"
+                    "generate_report": "generate_report"
                 }
-                mapped_task = task_mapping.get(nlu_intent)
-                if mapped_task in valid_tasks:
-                    self._log_routing_decision("nlu", mapped_task, nlu_confidence)
-                    return {**current_state, "stage": "routing", "current_task": mapped_task, "routing_method": "nlu", "last_update": datetime.now()}
+                
+                final_task = task_mapping.get(nlu_result.intent, "diagnose_issue")  # 默认任务
+                updated_state_from_nlu["current_task"] = final_task
+                
+                current_state = {**state, **updated_state_from_nlu}
+                print(f"✅ NLU直接路由完成 - 任务: {final_task}, 置信度: {nlu_result.confidence:.2f}")
+                return current_state
 
-            # 3. 使用 DSPy 智能路由作为备选
+            # ==================== 备用路由逻辑 ====================
+            print("🎯 使用备用路由...")
+            valid_tasks = ["process_alert", "diagnose_issue", "plan_actions", 
+                           "execute_actions", "generate_report"]
+
+            # 1. 检查是否有明确指定的任务类型
+            if state.get("current_task") in valid_tasks:
+                print(f"🎯 明确任务: {state['current_task']}")
+                return {**state, "current_task": state["current_task"]}
+
+            # 2. 使用 DSPy 智能路由作为备选
             try:
-                user_input = self._extract_user_input_for_routing(current_state)
+                user_input = state  # 简化：直接使用state作为路由输入
                 routing_result = await asyncio.to_thread(self.task_router.forward, user_input)
                 if routing_result.confidence > 0.6:
-                    self._log_routing_decision("dspy", routing_result.task_type, routing_result.confidence, routing_result.reasoning)
+                    print(f"🎯 DSPy路由: {routing_result.task_type} (置信度: {routing_result.confidence:.2f})")
                     return {
-                        **current_state,
-                        "stage": "routing",
-                        "current_task": routing_result.task_type,
-                        "routing_method": "dspy",
-                        "routing_confidence": routing_result.confidence,
-                        "routing_reasoning": routing_result.reasoning,
-                        "last_update": datetime.now()
+                        **state,
+                        "current_task": routing_result.task_type
                     }
                 else:
                     print(f"⚠️ DSPy 路由置信度不足 ({routing_result.confidence:.2f})")
             except Exception as e:
                 print(f"❌ DSPy 路由失败: {str(e)}")
-                current_errors = current_state.get("errors", [])
-                current_errors.append(f"DSPy routing failed: {str(e)}")
 
-            # 4. 回退到基于规则的路由
-            rule_based_task = self._rule_based_routing(current_state)
-            self._log_routing_decision("rule_based", rule_based_task)
+            # 3. 回退到基于规则的路由
+            rule_based_task = self._rule_based_routing(state)
+            print(f"🎯 规则路由: {rule_based_task}")
             return {
-                **current_state,
-                "stage": "routing",
+                **state,
                 "current_task": rule_based_task,
-                "routing_method": "rule_based",
-                "last_update": datetime.now()
+                "errors": (state.get("errors") or []) + [f"DSPy routing failed"]
             }
 
         except Exception as e:
@@ -354,7 +414,7 @@ class IntelligentOpsAgent:
             
             # 分析告警
             # 获取历史告警信息，转换为 AlertInfo 格式
-            historical_incidents = state.get("incident_history", [])
+            historical_incidents = []  # 简化：不使用历史数据
             historical_alerts = []
             for incident in historical_incidents:
                 if isinstance(incident, dict) and "alert_info" in incident:
@@ -394,7 +454,7 @@ class IntelligentOpsAgent:
             }
     
     async def _diagnose_issue_node(self, state: ChatState) -> ChatState:
-        """诊断问题节点"""
+        """诊断问题节点 - 支持主动干预"""
         try:
             symptoms = state.get("symptoms", [])
             context = state.get("context", {})
@@ -436,7 +496,7 @@ class IntelligentOpsAgent:
                 alert_analysis=alert_analysis,
                 system_metrics=context.get("system_metrics", {}) if context else {},
                 log_entries=context.get("log_entries", []) if context else [],
-                historical_incidents=state.get("incident_history", []),
+                historical_incidents=[],
                 topology_info=context.get("topology_info", {}) if context else {}
             )
             
@@ -445,6 +505,45 @@ class IntelligentOpsAgent:
                 self.diagnostic_agent.forward,
                 diagnostic_context
             )
+            
+            # 主动干预：如果诊断置信度低，请求额外信息
+            if diagnostic_result.confidence_score < 0.7:
+                print(f"🤔 诊断置信度较低 ({diagnostic_result.confidence_score:.2f})，请求运维人员提供额外信息...")
+                
+                additional_info = await asyncio.to_thread(
+                    self.request_operator_input,
+                    f"诊断置信度较低({diagnostic_result.confidence_score:.2f})，请提供额外信息：\n"
+                    f"初步诊断：{diagnostic_result.root_cause}\n"
+                    f"受影响组件：{', '.join(diagnostic_result.affected_components)}\n"
+                    f"是否有其他线索、日志或观察到的异常？",
+                    {
+                        "current_diagnosis": diagnostic_result.root_cause,
+                        "confidence": diagnostic_result.confidence_score,
+                        "affected_components": diagnostic_result.affected_components,
+                        "evidence": diagnostic_result.evidence
+                    }
+                )
+                
+                # 如果获得了额外信息，基于新信息重新诊断
+                if additional_info and additional_info.strip():
+                    print(f"📋 收到额外信息，重新进行诊断: {additional_info[:100]}...")
+                    
+                    # 增强诊断上下文
+                    enhanced_context = DiagnosticContext(
+                        alert_analysis=alert_analysis,
+                        system_metrics=context.get("system_metrics", {}) if context else {},
+                        log_entries=context.get("log_entries", []) + [f"运维人员补充: {additional_info}"] if context else [f"运维人员补充: {additional_info}"],
+                        historical_incidents=[],
+                        topology_info=context.get("topology_info", {}) if context else {},
+                        additional_context={"human_input": additional_info}
+                    )
+                    
+                    # 重新执行诊断
+                    diagnostic_result = await asyncio.to_thread(
+                        self.diagnostic_agent.forward,
+                        enhanced_context
+                    )
+                    print(f"✅ 基于额外信息重新诊断完成，新置信度: {diagnostic_result.confidence_score:.2f}")
             
             return {
                 **state,
@@ -463,12 +562,7 @@ class IntelligentOpsAgent:
             }
             
         except Exception as e:
-            return {
-                **state,
-                "stage": "error",
-                "errors": state.get("errors", []) + [f"Diagnosis error: {str(e)}"],
-                "last_update": datetime.now()
-            }
+            return self._create_error_state(state, e, "diagnose_issue")
     
     async def _plan_actions_node(self, state: ChatState) -> ChatState:
         """规划行动节点"""
@@ -543,14 +637,78 @@ class IntelligentOpsAgent:
                 "last_update": datetime.now()
             }
     
+    def _requires_execution_approval(self, action_plan: Dict[str, Any]) -> bool:
+        """判断是否需要执行审批"""
+        if not action_plan:
+            return False
+        
+        # 检查风险级别
+        risk_assessment = action_plan.get("risk_assessment", "low")
+        if risk_assessment in ["high", "critical"]:
+            return True
+        
+        # 检查是否明确要求审批
+        if action_plan.get("approval_required", False):
+            return True
+        
+        # 检查步骤中是否有高风险操作
+        steps = action_plan.get("steps", [])
+        high_risk_actions = ["restart", "reboot", "delete", "remove", "kill", "stop"]
+        for step in steps:
+            action_type = step.get("action_type", "").lower()
+            description = step.get("description", "").lower()
+            command = step.get("command", "").lower()
+            
+            if any(risk_action in action_type or risk_action in description or risk_action in command 
+                   for risk_action in high_risk_actions):
+                return True
+        
+        return False
+
     async def _execute_actions_node(self, state: ChatState) -> ChatState:
-        """执行行动节点"""
+        """执行行动节点 - 支持主动审批"""
         try:
             action_plan = state.get("action_plan")
             if not action_plan:
                 raise ValueError("No action plan available")
             
-            if not self.config.auto_execution:
+            # 主动干预：检测高风险操作并请求审批
+            if self._requires_execution_approval(action_plan):
+                print(f"⚠️ 检测到高风险操作，请求执行审批...")
+                
+                approval_decision = await asyncio.to_thread(
+                    self.request_execution_approval,
+                    action_plan
+                )
+                
+                if approval_decision.lower() in ['rejected', 'deny', 'no', 'cancel']:
+                    return {
+                        **state,
+                        "stage": "execution_rejected",
+                        "execution_result": {
+                            "status": "rejected_by_operator",
+                            "reason": f"执行被拒绝: {approval_decision}",
+                            "plan_id": action_plan.get("plan_id", "unknown"),
+                            "timestamp": datetime.now().isoformat()
+                        },
+                        "last_update": datetime.now()
+                    }
+                elif approval_decision.lower() in ['modified', 'change', 'update']:
+                    # 如果用户要求修改，返回到规划阶段
+                    return {
+                        **state,
+                        "execution_result": {
+                            "status": "modification_requested",
+                            "reason": f"需要修改计划: {approval_decision}",
+                            "plan_id": action_plan.get("plan_id", "unknown"),
+                            "timestamp": datetime.now().isoformat()
+                        },
+                        "current_task": "plan_actions"
+                    }
+                else:
+                    print(f"✅ 执行已获得审批: {approval_decision}")
+            
+            if not self.config.auto_execution and not self._requires_execution_approval(action_plan):
                 return {
                     **state,
                     "stage": "executed",
@@ -566,9 +724,12 @@ class IntelligentOpsAgent:
             executed_steps = []
             failed_steps = []
             
+            print(f"🚀 开始执行行动计划: {action_plan.get('plan_id', 'unknown')}")
+            
             for step in action_plan.get("steps", []):
                 try:
                     # 模拟步骤执行
+                    print(f"  ⏳ 执行步骤: {step.get('description', step.get('step_id'))}")
                     await asyncio.sleep(0.1)  # 模拟执行时间
                     executed_steps.append(step["step_id"])
                 except Exception as e:
@@ -578,6 +739,7 @@ class IntelligentOpsAgent:
                     })
             
             execution_status = "success" if not failed_steps else "partial" if executed_steps else "failed"
+            print(f"✅ 执行完成，状态: {execution_status}")
             
             return {
                 **state,
@@ -587,18 +749,14 @@ class IntelligentOpsAgent:
                     "plan_id": action_plan.get("plan_id", "unknown"),
                     "executed_steps": executed_steps,
                     "failed_steps": failed_steps,
-                    "execution_time": datetime.now().isoformat()
+                    "execution_time": datetime.now().isoformat(),
+                    "approval_received": True if self._requires_execution_approval(action_plan) else False
                 },
                 "last_update": datetime.now()
             }
             
         except Exception as e:
-            return {
-                **state,
-                "stage": "error",
-                "errors": state.get("errors", []) + [f"Execution error: {str(e)}"],
-                "last_update": datetime.now()
-            }
+            return self._create_error_state(state, e, "execute_actions")
     
     async def _generate_report_node(self, state: ChatState) -> ChatState:
         """生成报告节点"""
@@ -614,22 +772,66 @@ class IntelligentOpsAgent:
                     "last_update": datetime.now()
                 }
             
-            # 生成报告
-            # TODO: 实现 ReportGenerator 的调用
-            report = {
-                "incident_id": state.get("workflow_id", "unknown"),
-                "title": f"智能运维报告 - {state['agent_id']}",
-                "summary": f"任务完成: {state.get('current_task', 'unknown')}",
-                "timestamp": datetime.now().isoformat(),
-                "agent_id": state["agent_id"],
-                "status": "generated",
-                "results": {
-                    "analysis": state.get("analysis_result"),
-                    "diagnosis": state.get("diagnostic_result"),
-                    "action_plan": state.get("action_plan"),
-                    "execution": state.get("execution_result")
+            # 使用 ReportGenerator 生成专业报告
+            try:
+                # 准备报告输入数据
+                incident_data = {
+                    "incident_id": state.get("workflow_id", "unknown"),
+                    "alert_info": state.get("alert_info"),
+                    "symptoms": state.get("symptoms"),
+                    "context": state.get("context"),
+                    "timestamp": datetime.now().isoformat()
                 }
-            }
+                
+                diagnostic_data = state.get("diagnostic_result", {})
+                action_data = state.get("action_plan", {})
+                execution_data = state.get("execution_result", {})
+                
+                # 调用ReportGenerator的forward方法
+                report_result = await asyncio.to_thread(
+                    self.report_generator.forward,
+                    incident_data=str(incident_data),
+                    diagnostic_result=str(diagnostic_data),
+                    action_plan=str(action_data),
+                    execution_result=str(execution_data)
+                )
+                
+                # 构建最终报告
+                report = {
+                    "incident_id": state.get("workflow_id", "unknown"),
+                    "title": f"智能运维报告 - {self.config.agent_id}",
+                    "summary": report_result.report_summary,
+                    "key_findings": report_result.key_findings,
+                    "recommendations": report_result.recommendations,
+                    "timestamp": datetime.now().isoformat(),
+                    "agent_id": self.config.agent_id,
+                    "status": "generated",
+                    "raw_data": {
+                        "analysis": state.get("analysis_result"),
+                        "diagnosis": state.get("diagnostic_result"),
+                        "action_plan": state.get("action_plan"),
+                        "execution": state.get("execution_result")
+                    }
+                }
+                
+            except Exception as e:
+                print(f"❌ ReportGenerator 调用失败: {e}")
+                # 回退到简化版本
+                report = {
+                    "incident_id": state.get("workflow_id", "unknown"),
+                    "title": f"智能运维报告 - {self.config.agent_id}",
+                    "summary": f"任务完成: {state.get('current_task', 'unknown')}",
+                    "timestamp": datetime.now().isoformat(),
+                    "agent_id": self.config.agent_id,
+                    "status": "generated_fallback",
+                    "error": f"报告生成失败: {str(e)}",
+                    "raw_data": {
+                        "analysis": state.get("analysis_result"),
+                        "diagnosis": state.get("diagnostic_result"),
+                        "action_plan": state.get("action_plan"),
+                        "execution": state.get("execution_result")
+                    }
+                }
             
             return {
                 **state,
@@ -646,51 +848,6 @@ class IntelligentOpsAgent:
                 "last_update": datetime.now()
             }
     
-    async def _learn_feedback_node(self, state: ChatState) -> ChatState:
-        """学习反馈节点"""
-        try:
-            if not self.config.enable_learning:
-                return {
-                    **state,
-                    "stage": "learned",
-                    "last_update": datetime.now()
-                }
-            
-            # 从任务输入中获取反馈数据
-            feedback = state.get("task_input", {})
-            
-            # 更新学习数据
-            updated_learning_data = {
-                **state.get("learning_data", {}),
-                **feedback,
-                "last_feedback_time": datetime.now().isoformat()
-            }
-            
-            # 更新历史记录
-            updated_history = state.get("incident_history", [])
-            if state.get("report"):
-                updated_history.append({
-                    "incident_id": state["workflow_id"],
-                    "timestamp": datetime.now().isoformat(),
-                    "task_type": state.get("current_task"),
-                    "results": state.get("task_output", {})
-                })
-            
-            return {
-                **state,
-                "stage": "learned",
-                "learning_data": updated_learning_data,
-                "incident_history": updated_history,
-                "last_update": datetime.now()
-            }
-            
-        except Exception as e:
-            return {
-                **state,
-                "stage": "error",
-                "errors": state.get("errors", []) + [f"Learning error: {str(e)}"],
-                "last_update": datetime.now()
-            }
     
     async def _finalize_node(self, state: ChatState) -> ChatState:
         """完成节点 - 支持聊天模式和任务模式"""
@@ -710,9 +867,8 @@ class IntelligentOpsAgent:
 """
             
             # 添加具体的处理结果
-            if state.get('parsed_intent'):
-                response_text += f"🧠 **识别意图**: {state.get('parsed_intent')}\n"
-                response_text += f"📈 **置信度**: {state.get('nlu_confidence', 0):.2f}\n"
+            if state.get('current_task'):
+                response_text += f"🎯 **当前任务**: {state.get('current_task')}\n"
             
             if state.get('alert_info'):
                 alert_info = state.get('alert_info')
@@ -792,6 +948,7 @@ class IntelligentOpsAgent:
     
     # ==================== 辅助函数 ====================
     
+    
     def _create_error_state(self, state: ChatState, error: Exception, node_name: str, 
                            context: Dict[str, Any] = None) -> ChatState:
         """创建标准化的错误状态"""
@@ -817,16 +974,23 @@ class IntelligentOpsAgent:
             "last_update": datetime.now()
         }
     
-    def _log_routing_decision(self, method: str, task: str, confidence: float = None, 
-                             reasoning: str = None):
-        """记录路由决策日志"""
-        log_msg = f"🎯 路由决策: {method} → {task}"
-        if confidence is not None:
-            log_msg += f" (置信度: {confidence:.2f})"
-        print(log_msg)
-        
-        if reasoning:
-            print(f"💭 推理过程: {reasoning}")
+    
+    def _get_latest_user_input(self, state: ChatState) -> Optional[str]:
+        """从消息历史中获取最新的用户输入"""
+        messages = state.get("messages", [])
+        if not messages:
+            return None
+            
+        last_message = messages[-1]
+        if not hasattr(last_message, 'content'):
+            return None
+            
+        content = last_message.content
+        if isinstance(content, list):
+            return "".join(item['text'] if isinstance(item, dict) and 'text' in item else str(item) for item in content)
+        else:
+            return str(content)
+
     
     # ==================== 条件函数 ====================
     
@@ -841,36 +1005,6 @@ class IntelligentOpsAgent:
         # 默认回退
         return "process_alert"
     
-    def _extract_user_input_for_routing(self, state: ChatState) -> Dict[str, Any]:
-        """提取用户输入用于路由判断"""
-        user_input = {}
-        
-        # 收集所有可能的输入信息
-        if state.get("alert_info"):
-            user_input["alert_info"] = state["alert_info"]
-        
-        if state.get("symptoms"):
-            user_input["symptoms"] = state["symptoms"]
-        
-        if state.get("context"):
-            user_input["context"] = state["context"]
-        
-        if state.get("diagnostic_result"):
-            user_input["diagnostic_result"] = state["diagnostic_result"]
-        
-        if state.get("action_plan"):
-            user_input["action_plan"] = state["action_plan"]
-        
-        # 任务输入中的描述信息
-        task_input = state.get("task_input", {})
-        if isinstance(task_input, dict):
-            user_input.update(task_input)
-        
-        # 工作流ID作为上下文
-        if state.get("workflow_id"):
-            user_input["workflow_id"] = state["workflow_id"]
-        
-        return user_input
     
     def _rule_based_routing(self, state: ChatState) -> str:
         """基于规则的回退路由"""
@@ -886,7 +1020,7 @@ class IntelligentOpsAgent:
         elif state.get("task_input", {}).get("incident_id"):
             return "generate_report"
         elif state.get("task_input", {}).get("feedback"):
-            return "learn_feedback"
+            return "generate_report"  # 简化：反馈直接转为报告生成
         else:
             # 默认任务：处理告警
             print("🔄 使用默认任务类型: process_alert")
@@ -950,352 +1084,6 @@ class IntelligentOpsAgent:
         else:
             return "END"
     
-    # ==================== 公共接口 ====================
-    
-    async def process_input(self, user_input: Any) -> Dict[str, Any]:
-        """智能处理用户输入
-        
-        这是主要的公共接口，支持任意格式的输入，自动判断任务类型并处理。
-        
-        Args:
-            user_input: 用户输入，可以是：
-                - 告警信息字典
-                - 症状列表
-                - 自然语言描述
-                - 诊断结果
-                - 行动计划
-                - 任何其他格式
-        
-        Returns:
-            Dict[str, Any]: 处理结果
-        """
-        # 将用户输入标准化为状态参数
-        state_kwargs = self._normalize_user_input(user_input)
-        
-        # 创建初始状态（自动判断任务类型）
-        initial_state = self._create_initial_state(**state_kwargs)
-        
-        # 运行智能体图
-        return await self._run_agent_task(initial_state)
-    
-    def _normalize_user_input(self, user_input: Any) -> Dict[str, Any]:
-        """标准化用户输入为状态参数"""
-        if isinstance(user_input, dict):
-            # 字典格式：检查并补充必要字段
-            normalized = user_input.copy()
-            
-            # 如果包含 alert_info，确保格式正确
-            if "alert_info" in normalized:
-                alert_info = normalized["alert_info"]
-                if isinstance(alert_info, dict):
-                    # 补充缺失的必要字段
-                    if "timestamp" not in alert_info:
-                        alert_info["timestamp"] = datetime.now().isoformat()
-                    if "tags" not in alert_info:
-                        alert_info["tags"] = []
-                    if "metrics" not in alert_info:
-                        alert_info["metrics"] = {}
-            
-            return normalized
-        elif isinstance(user_input, str):
-            # 字符串格式：作为自然语言输入处理
-            return {
-                "raw_input": user_input,  # 保存原始输入用于 NLU 处理
-                "message": user_input     # 保持兼容性
-            }
-        elif isinstance(user_input, list):
-            # 列表格式：假设是症状列表
-            return {"symptoms": user_input}
-        elif hasattr(user_input, "__dict__"):
-            # 对象格式：转换为字典
-            return user_input.__dict__
-        else:
-            # 其他格式：作为自然语言描述处理
-            str_input = str(user_input)
-            return {
-                "raw_input": str_input,
-                "description": str_input
-            }
-    
-    async def process_alert(self, alert: Union[AlertInfo, Dict[str, Any]]) -> Dict[str, Any]:
-        """处理告警"""
-        # 转换告警格式
-        if isinstance(alert, dict):
-            alert_info = AlertInfo(**alert)
-        else:
-            alert_info = alert
-        
-        # 创建初始状态
-        initial_state = self._create_initial_state(
-            task="process_alert",
-            alert_info=alert_info
-        )
-        
-        # 运行智能体图
-        return await self._run_agent_task(initial_state)
-    
-    async def diagnose_issue(self, symptoms: List[str], context: Dict[str, Any]) -> Dict[str, Any]:
-        """诊断问题"""
-        # 创建初始状态
-        initial_state = self._create_initial_state(
-            task="diagnose_issue",
-            symptoms=symptoms,
-            context=context
-        )
-        
-        # 运行智能体图
-        return await self._run_agent_task(initial_state)
-    
-    async def plan_actions(self, diagnostic_result: Dict[str, Any], 
-                          system_context: Dict[str, Any]) -> Dict[str, Any]:
-        """规划行动"""
-        # 创建初始状态
-        initial_state = self._create_initial_state(
-            task="plan_actions",
-            diagnostic_result=diagnostic_result,
-            context=system_context
-        )
-        
-        # 运行智能体图
-        return await self._run_agent_task(initial_state)
-    
-    async def execute_actions(self, action_plan: Dict[str, Any]) -> Dict[str, Any]:
-        """执行行动"""
-        # 创建初始状态
-        initial_state = self._create_initial_state(
-            task="execute_actions",
-            action_plan=action_plan
-        )
-        
-        # 运行智能体图
-        return await self._run_agent_task(initial_state)
-    
-    async def generate_report(self, incident_data: Dict[str, Any]) -> Dict[str, Any]:
-        """生成报告"""
-        # 创建初始状态
-        initial_state = self._create_initial_state(
-            task="generate_report",
-            task_input=incident_data
-        )
-        
-        # 运行智能体图
-        return await self._run_agent_task(initial_state)
-    
-    async def learn_from_feedback(self, feedback: Dict[str, Any]) -> Dict[str, Any]:
-        """从反馈中学习"""
-        # 创建初始状态
-        initial_state = self._create_initial_state(
-            task="learn_feedback",
-            task_input=feedback
-        )
-        
-        # 运行智能体图
-        return await self._run_agent_task(initial_state)
-    
-    # ==================== 辅助方法 ====================
-    
-    def _create_initial_state(self, task: Optional[str] = None, **kwargs) -> ChatState:
-        """创建初始状态
-        
-        Args:
-            task: 任务类型，可选。如果不提供，将通过 DSPy 智能路由自动判断
-            **kwargs: 其他状态参数
-        """
-        now = datetime.now()
-        
-        # 如果没有指定任务类型，先创建临时状态用于路由判断
-        if not task:
-            # 创建临时状态用于智能路由
-            temp_state = ChatState(
-                agent_id=self.config.agent_id,
-                agent_type=self.config.agent_type,
-                specialization=self.config.specialization,
-                current_task=None,  # 留空，让路由器判断
-                task_input=kwargs,
-                task_output=None,
-                status="idle",
-                stage="input",
-                alert_info=kwargs.get("alert_info"),
-                symptoms=kwargs.get("symptoms"),
-                context=kwargs.get("context"),
-                # 自然语言理解相关字段
-                raw_input=kwargs.get("raw_input"),
-                parsed_intent=kwargs.get("parsed_intent"),
-                extracted_info=kwargs.get("extracted_info"),
-                nlu_confidence=kwargs.get("nlu_confidence"),
-                nlu_reasoning=kwargs.get("nlu_reasoning"),
-                analysis_result=None,
-                diagnostic_result=kwargs.get("diagnostic_result"),
-                action_plan=kwargs.get("action_plan"),
-                execution_result=None,
-                report=None,
-                incident_history=[],
-                learning_data={},
-                performance_metrics={},
-                errors=[],
-                retry_count=0,
-                max_retries=self.config.max_retries,
-                start_time=now,
-                last_update=now,
-                workflow_id=f"{self.config.agent_id}_auto_{now.strftime('%Y%m%d_%H%M%S')}"
-            )
-            
-            # 使用智能路由判断任务类型
-            task = self._route_task_condition(temp_state)
-            print(f"🎯 自动判断任务类型: {task}")
-        
-        # 创建最终的工作流ID
-        workflow_id = f"{self.config.agent_id}_{task}_{now.strftime('%Y%m%d_%H%M%S')}"
-        
-        return ChatState(
-            agent_id=self.config.agent_id,
-            agent_type=self.config.agent_type,
-            specialization=self.config.specialization,
-            current_task=task,
-            task_input=kwargs,
-            task_output=None,
-            status="idle",
-            stage="input",
-            alert_info=kwargs.get("alert_info"),
-            symptoms=kwargs.get("symptoms"),
-            context=kwargs.get("context"),
-            # 自然语言理解相关字段
-            raw_input=kwargs.get("raw_input"),
-            parsed_intent=kwargs.get("parsed_intent"),
-            extracted_info=kwargs.get("extracted_info"),
-            nlu_confidence=kwargs.get("nlu_confidence"),
-            nlu_reasoning=kwargs.get("nlu_reasoning"),
-            analysis_result=None,
-            diagnostic_result=kwargs.get("diagnostic_result"),
-            action_plan=kwargs.get("action_plan"),
-            execution_result=None,
-            report=None,
-            incident_history=[],
-            learning_data={},
-            performance_metrics={},
-            errors=[],
-            retry_count=0,
-            max_retries=self.config.max_retries,
-            start_time=now,
-            last_update=now,
-            workflow_id=workflow_id
-        )
-    
-    async def _run_agent_task(self, initial_state: ChatState) -> Dict[str, Any]:
-        """运行智能体任务"""
-        try:
-            if not self.compiled_graph:
-                self.compile()
-            
-            # 运行智能体图
-            final_state = await self.compiled_graph.ainvoke(
-                initial_state,
-                config={"recursion_limit": self.config.max_retries * 5}
-            )
-            
-            # 检查返回状态
-            if final_state is None:
-                return {
-                    "status": "error",
-                    "error": "智能体图返回空状态",
-                    "timestamp": datetime.now().isoformat()
-                }
-            
-            # 返回任务输出
-            task_output = final_state.get("task_output")
-            if task_output is None:
-                # 如果没有 task_output，创建一个默认的
-                return {
-                    "status": "completed",
-                    "task_type": final_state.get("current_task", "unknown"),
-                    "results": {
-                        "analysis": final_state.get("analysis_result"),
-                        "diagnosis": final_state.get("diagnostic_result"),
-                        "action_plan": final_state.get("action_plan"),
-                        "execution": final_state.get("execution_result"),
-                        "report": final_state.get("report")
-                    },
-                    "errors": final_state.get("errors", []),
-                    "timestamp": datetime.now().isoformat()
-                }
-            return task_output
-            
-        except Exception as e:
-            return {
-                "status": "error",
-                "error": str(e),
-                "timestamp": datetime.now().isoformat()
-            }
-    
-    # ==================== 状态和指标 ====================
-    
-    def get_agent_status(self) -> Dict[str, Any]:
-        """获取智能体状态"""
-        return {
-            "agent_id": self.config.agent_id,
-            "agent_type": self.config.agent_type,
-            "specialization": self.config.specialization,
-            "status": "ready",
-            "graph_compiled": self.compiled_graph is not None,
-            "learning_enabled": self.config.enable_learning,
-            "reporting_enabled": self.config.enable_reporting,
-            "auto_execution_enabled": self.config.auto_execution,
-            "last_update": datetime.now().isoformat()
-        }
-    
-    def get_performance_metrics(self) -> Dict[str, Any]:
-        """获取性能指标"""
-        return {
-            "agent_id": self.config.agent_id,
-            "incidents_processed": 0,  # 实际应该从状态中获取
-            "average_resolution_time": 300.0,  # 模拟值
-            "success_rate": 0.85,  # 模拟值
-            "learning_data_points": 0,  # 实际应该从状态中获取
-            "timestamp": datetime.now().isoformat()
-        }
-
-
-class AgentManager:
-    """智能体管理器"""
-    
-    def __init__(self):
-        self.agents: Dict[str, IntelligentOpsAgent] = {}
-    
-    def create_agent(self, config: AgentConfig) -> IntelligentOpsAgent:
-        """创建智能体"""
-        agent = IntelligentOpsAgent(config)
-        self.agents[config.agent_id] = agent
-        return agent
-    
-    def get_agent(self, agent_id: str) -> Optional[IntelligentOpsAgent]:
-        """获取智能体"""
-        return self.agents.get(agent_id)
-    
-    def list_agents(self) -> List[str]:
-        """列出所有智能体"""
-        return list(self.agents.keys())
-    
-    def remove_agent(self, agent_id: str) -> bool:
-        """移除智能体"""
-        if agent_id in self.agents:
-            del self.agents[agent_id]
-            return True
-        return False
-    
-    def get_system_status(self) -> Dict[str, Any]:
-        """获取系统状态"""
-        return {
-            "total_agents": len(self.agents),
-            "active_agents": len([a for a in self.agents.values() if a.current_state]),
-            "agent_list": [
-                {
-                    "agent_id": agent_id,
-                    "status": agent.get_agent_status()
-                }
-                for agent_id, agent in self.agents.items()
-            ],
-            "timestamp": datetime.now().isoformat()
-        }
 
 
 # ==================== LangGraph Studio 集成 ====================
@@ -1305,7 +1093,6 @@ _default_studio_config = AgentConfig(
     agent_id="ops_agent_studio",
     agent_type="general", 
     specialization="studio_demo",
-    enable_learning=True,
     enable_reporting=True,
     auto_execution=False
 )

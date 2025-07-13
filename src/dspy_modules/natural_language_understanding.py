@@ -37,6 +37,8 @@ class AlertParsing(dspy.Signature):
     reasoning: str = dspy.OutputField(desc="告警解析的推理过程")
 
 
+
+
 class NLUResult(BaseModel):
     """自然语言理解结果"""
     intent: str
@@ -272,3 +274,4 @@ class NaturalLanguageUnderstanding(dspy.Module):
             context["user_impact"] = True
         
         return context if context else None
+    

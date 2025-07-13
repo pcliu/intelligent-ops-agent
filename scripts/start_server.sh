@@ -116,7 +116,7 @@ echo "  - 日志级别: $SERVER_LOG_LEVEL"
 echo
 
 # 构建启动命令
-CMD="langgraph dev --port $PORT --host $HOST --server-log-level $SERVER_LOG_LEVEL"
+CMD="$VIRTUAL_ENV/bin/langgraph dev --port $PORT --host $HOST --server-log-level $SERVER_LOG_LEVEL"
 if [ "$NO_BROWSER" = true ]; then
     CMD="$CMD --no-browser"
 fi
