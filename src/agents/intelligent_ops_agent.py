@@ -13,8 +13,8 @@ from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
-from langchain_core.tools import tool
-from langgraph.prebuilt import interrupt
+# from langchain_core.tools import tool  # 不再需要，中断函数是普通函数
+from langgraph.types import interrupt
 from src.dspy_modules.alert_analyzer import AlertInfo, AlertAnalyzer
 from src.dspy_modules.diagnostic_agent import DiagnosticAgent
 from src.dspy_modules.action_planner import ActionPlanner
@@ -62,7 +62,6 @@ class ChatState(TypedDict):
 
 # ==================== 人类干预工具 ====================
 
-@tool
 def request_operator_input(query: str, context: dict = None) -> str:
     """请求运维人员输入和确认
     
@@ -83,7 +82,6 @@ def request_operator_input(query: str, context: dict = None) -> str:
     return human_response.get("response", "")
 
 
-@tool  
 def request_execution_approval(action_plan: dict) -> str:
     """请求执行审批
     
@@ -103,7 +101,6 @@ def request_execution_approval(action_plan: dict) -> str:
     return human_response.get("decision", "rejected")
 
 
-@tool
 def request_clarification(ambiguous_input: str, context: dict = None) -> str:
     """请求意图澄清
     
@@ -310,10 +307,9 @@ class IntelligentOpsAgent:
                 
                 # 如果NLU置信度很低，主动请求澄清
                 if nlu_result.confidence < 0.5:
-                    clarification = await asyncio.to_thread(
-                        self.request_clarification,
-                        user_input,
-                        {
+                    clarification = self.request_clarification(
+                        ambiguous_input=user_input,
+                        context={
                             "low_confidence_nlu": True,
                             "original_input": user_input,
                             "current_stage": state.get("stage", "unknown"),
@@ -396,6 +392,9 @@ class IntelligentOpsAgent:
             }
 
         except Exception as e:
+            # 检查是否是中断异常，如果是则重新抛出
+            if "Interrupt" in type(e).__name__ or "interrupt" in str(e).lower():
+                raise
             return self._create_error_state(state, e, "understand_and_route")
     
     async def _process_alert_node(self, state: ChatState) -> ChatState:
@@ -510,13 +509,12 @@ class IntelligentOpsAgent:
             if diagnostic_result.confidence_score < 0.7:
                 print(f"🤔 诊断置信度较低 ({diagnostic_result.confidence_score:.2f})，请求运维人员提供额外信息...")
                 
-                additional_info = await asyncio.to_thread(
-                    self.request_operator_input,
-                    f"诊断置信度较低({diagnostic_result.confidence_score:.2f})，请提供额外信息：\n"
-                    f"初步诊断：{diagnostic_result.root_cause}\n"
-                    f"受影响组件：{', '.join(diagnostic_result.affected_components)}\n"
-                    f"是否有其他线索、日志或观察到的异常？",
-                    {
+                additional_info = self.request_operator_input(
+                    query=f"诊断置信度较低({diagnostic_result.confidence_score:.2f})，请提供额外信息：\n"
+                          f"初步诊断：{diagnostic_result.root_cause}\n"
+                          f"受影响组件：{', '.join(diagnostic_result.affected_components)}\n"
+                          f"是否有其他线索、日志或观察到的异常？",
+                    context={
                         "current_diagnosis": diagnostic_result.root_cause,
                         "confidence": diagnostic_result.confidence_score,
                         "affected_components": diagnostic_result.affected_components,
@@ -562,6 +560,9 @@ class IntelligentOpsAgent:
             }
             
         except Exception as e:
+            # 检查是否是中断异常，如果是则重新抛出
+            if "Interrupt" in type(e).__name__ or "interrupt" in str(e).lower():
+                raise
             return self._create_error_state(state, e, "diagnose_issue")
     
     async def _plan_actions_node(self, state: ChatState) -> ChatState:
@@ -676,10 +677,7 @@ class IntelligentOpsAgent:
             if self._requires_execution_approval(action_plan):
                 print(f"⚠️ 检测到高风险操作，请求执行审批...")
                 
-                approval_decision = await asyncio.to_thread(
-                    self.request_execution_approval,
-                    action_plan
-                )
+                approval_decision = self.request_execution_approval(action_plan=action_plan)
                 
                 if approval_decision.lower() in ['rejected', 'deny', 'no', 'cancel']:
                     return {
@@ -756,6 +754,9 @@ class IntelligentOpsAgent:
             }
             
         except Exception as e:
+            # 检查是否是中断异常，如果是则重新抛出
+            if "Interrupt" in type(e).__name__ or "interrupt" in str(e).lower():
+                raise
             return self._create_error_state(state, e, "execute_actions")
     
     async def _generate_report_node(self, state: ChatState) -> ChatState:

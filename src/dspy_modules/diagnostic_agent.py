@@ -11,6 +11,7 @@ class DiagnosticContext(BaseModel):
     log_entries: List[str] = Field(default_factory=list)
     historical_incidents: List[Dict[str, Any]] = Field(default_factory=list)
     topology_info: Dict[str, Any] = Field(default_factory=dict)
+    additional_context: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 
 class DiagnosticResult(BaseModel):
@@ -88,7 +89,7 @@ class DiagnosticAgent(dspy.Module):
         root_cause_result = self.root_cause_analyzer(
             alert_info=self._format_alert_analysis(diagnostic_context.alert_analysis),
             system_metrics=self._format_system_metrics(diagnostic_context.system_metrics),
-            log_entries=self._format_log_entries(diagnostic_context.log_entries)
+            log_entries=self._format_log_entries_with_context(diagnostic_context)
         )
         
         # 2. 影响评估
@@ -141,6 +142,18 @@ class DiagnosticAgent(dspy.Module):
     def _format_log_entries(self, log_entries: List[str]) -> str:
         """格式化日志条目"""
         return "; ".join(log_entries[-20:])  # 只取最近20条
+    
+    def _format_log_entries_with_context(self, diagnostic_context: DiagnosticContext) -> str:
+        """格式化日志条目，包含额外上下文信息"""
+        log_entries = diagnostic_context.log_entries[-20:]  # 只取最近20条
+        
+        # 添加额外上下文信息
+        if diagnostic_context.additional_context:
+            human_input = diagnostic_context.additional_context.get("human_input")
+            if human_input:
+                log_entries.append(f"运维人员提供的额外信息: {human_input}")
+        
+        return "; ".join(log_entries)
     
     def _format_topology_info(self, topology: Dict[str, Any]) -> str:
         """格式化拓扑信息"""
