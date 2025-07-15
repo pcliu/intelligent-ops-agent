@@ -321,11 +321,9 @@ Studio URL: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
 - 显示中断数据：诊断置信度、初步判断、请求额外信息
 - **Studio 行为**: 暂停执行，等待人工输入
 
-**Resume 输入示例**:
-```json
-{
-  "response": "我发现数据库连接池使用率很高，而且有很多慢查询日志"
-}
+**Resume 输入示例** (⚠️ **已修复** - 直接输入文本，无需JSON格式):
+```
+我发现数据库连接池使用率很高，而且有很多慢查询日志
 ```
 
 **预期恢复**: 基于额外信息重新诊断，提高置信度
@@ -353,11 +351,9 @@ Studio URL: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
 - 显示低置信度NLU结果和澄清请求
 - **Studio 行为**: 等待澄清输入
 
-**Resume 输入示例**:
-```json
-{
-  "clarification": "Web服务器CPU使用率过高，用户访问很慢"
-}
+**Resume 输入示例** (⚠️ **已修复** - 直接输入文本):
+```
+Web服务器CPU使用率过高，用户访问很慢
 ```
 
 **预期恢复**: 重新进行NLU并继续正常流程
@@ -385,30 +381,26 @@ Studio URL: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
 - 显示行动计划和风险评估
 - **Studio 行为**: 等待审批决策
 
-**Resume 输入选项**:
+**Resume 输入选项** (⚠️ **已修复** - 直接输入决策文本):
 
 审批通过:
-```json
-{
-  "decision": "approved",
-  "comment": "同意重启，已通知相关团队"
-}
+```
+approved
 ```
 
 审批拒绝:
-```json
-{
-  "decision": "rejected", 
-  "reason": "风险太高，先尝试其他方案"
-}
+```
+rejected
 ```
 
 修改请求:
-```json
-{
-  "decision": "modified",
-  "suggestion": "只重启应用服务，不要重启数据库"
-}
+```
+modified
+```
+
+或带说明的回复:
+```
+同意重启，已通知相关团队
 ```
 
 **预期恢复**: 根据审批决策继续或修改执行计划
@@ -436,11 +428,9 @@ Studio URL: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
 2. **诊断阶段**: 请求确认某些假设
 3. **规划阶段**: 请求对建议方案的反馈
 
-**Resume 输入示例**:
-```json
-{
-  "response": "故障主要发生在晚上7-9点，影响订单支付功能，错误日志显示超时"
-}
+**Resume 输入示例** (⚠️ **已修复** - 直接输入文本):
+```
+故障主要发生在晚上7-9点，影响订单支付功能，错误日志显示超时
 ```
 
 ---
@@ -745,3 +735,82 @@ CPU使用率过高，需要分析一下
 ```
 生产环境磁盘使用率已经达到85%，而且每天增长约2%，担心很快会满
 ```
+
+---
+
+## 🔄 中断恢复功能修复说明
+
+### ⚠️ 重要更新：中断恢复输入格式已修复
+
+**问题**: 之前的中断恢复需要JSON格式输入，导致用户体验不佳。
+
+**修复**: 现在支持直接文本输入，无需JSON包装。
+
+### 🛠️ 修复的技术细节
+
+1. **中断函数增强**:
+   - `request_operator_input()` - 运维人员输入请求
+   - `request_execution_approval()` - 执行审批请求  
+   - `request_clarification()` - 意图澄清请求
+
+2. **返回值处理**:
+   ```python
+   # 自动处理不同类型的返回值
+   if isinstance(human_response, dict):
+       return human_response.get("response", "")
+   elif isinstance(human_response, str):
+       return human_response  # 直接返回字符串
+   else:
+       return str(human_response) if human_response else ""
+   ```
+
+3. **消息历史保存**:
+   - 中断前自动添加 AI 请求消息
+   - 恢复后自动添加用户回复消息
+   - 保持完整的对话上下文
+
+### 🎯 现在的使用方式
+
+#### 在 LangGraph Studio 中恢复中断：
+
+1. **触发中断** - 系统自动暂停并显示中断信息
+2. **点击 Resume** - 在 Studio 界面点击恢复按钮
+3. **直接输入文本** - 无需JSON，直接输入您的回复
+4. **点击 Submit** - 系统自动继续执行
+
+#### 输入示例：
+
+**诊断补充**:
+```
+我发现数据库连接池使用率很高，而且有很多慢查询日志
+```
+
+**执行审批**:
+```
+approved
+```
+或
+```
+同意重启，已通知团队
+```
+
+**意图澄清**:
+```
+帮我分析数据库性能问题，查询响应时间很慢
+```
+
+### ✅ 验证修复效果
+
+运行测试确认修复成功：
+```bash
+source .venv/bin/activate
+python test_interrupt_fix.py
+```
+
+**测试结果**: 
+- ✅ 中断函数正确处理字符串返回值
+- ✅ AI 消息格式清晰易读
+- ✅ 消息历史完整保存
+- ✅ 兼容不同输入格式
+
+### 🎉 现在可以享受流畅的中断恢复体验了！

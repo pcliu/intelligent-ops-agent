@@ -76,10 +76,44 @@ def request_operator_input(query: str, context: dict = None) -> str:
         "query": query,
         "context": context or {},
         "timestamp": datetime.now().isoformat(),
-        "type": "operator_input"
+        "type": "operator_input",
+        "ai_message": f"🤖 **需要您的输入**\n\n💬 **问题**: {query}\n\n⏰ **时间**: {datetime.now().strftime('%H:%M:%S')}"
     }
     human_response = interrupt(interrupt_data)
-    return human_response.get("response", "")
+    
+    # 处理不同类型的返回值 - LangGraph Studio 返回格式兼容
+    # Studio Web UI 返回格式: {random_id: {'response': 'user_input'}}
+    if isinstance(human_response, dict):
+        # 首先尝试直接键名
+        result = (human_response.get("response") or 
+                 human_response.get("input") or 
+                 human_response.get("value") or 
+                 human_response.get("content"))
+        
+        if result:
+            return result
+        
+        # 如果直接键名不匹配，尝试嵌套字典格式 {random_id: {'response': 'content'}}
+        for key, value in human_response.items():
+            if isinstance(value, dict):
+                nested_result = (value.get("response") or 
+                               value.get("input") or 
+                               value.get("value") or 
+                               value.get("content"))
+                if nested_result:
+                    return nested_result
+            elif isinstance(value, str) and value.strip():
+                return value
+        
+        # 如果都没有匹配到，返回字典的字符串表示
+        return str(human_response)
+    elif isinstance(human_response, str):
+        return human_response
+    elif hasattr(human_response, 'content'):
+        # 处理消息对象
+        return human_response.content
+    else:
+        return str(human_response) if human_response else ""
 
 
 def request_execution_approval(action_plan: dict) -> str:
@@ -91,14 +125,51 @@ def request_execution_approval(action_plan: dict) -> str:
     Returns:
         str: 审批决策 (approved/rejected/modified)
     """
+    steps_summary = "\n".join([f"  {i+1}. {step.get('description', step.get('step_id', 'N/A'))}" for i, step in enumerate(action_plan.get('steps', []))])
+    
     approval_data = {
         "action_plan": action_plan,
         "query": "请审批以下执行计划",
         "timestamp": datetime.now().isoformat(),
-        "type": "execution_approval"
+        "type": "execution_approval",
+        "ai_message": f"⚠️ **需要执行审批**\n\n"
+                     f"📋 **计划ID**: {action_plan.get('plan_id', 'unknown')}\n"
+                     f"⚡ **优先级**: {action_plan.get('priority', 'unknown')}\n"
+                     f"⚠️ **风险评估**: {action_plan.get('risk_assessment', 'unknown')}\n\n"
+                     f"📝 **执行步骤**:\n{steps_summary}\n\n"
+                     f"📋 **请选择**: approved(同意) / rejected(拒绝) / modified(修改)\n"
+                     f"⏰ **时间**: {datetime.now().strftime('%H:%M:%S')}"
     }
     human_response = interrupt(approval_data)
-    return human_response.get("decision", "rejected")
+    
+    # 处理不同类型的返回值 - 支持嵌套字典格式
+    if isinstance(human_response, dict):
+        # 首先尝试直接键名
+        result = (human_response.get("decision") or 
+                 human_response.get("response") or 
+                 human_response.get("input") or 
+                 human_response.get("value"))
+        
+        if result:
+            return result
+        
+        # 尝试嵌套字典格式
+        for key, value in human_response.items():
+            if isinstance(value, dict):
+                nested_result = (value.get("decision") or 
+                               value.get("response") or 
+                               value.get("input") or 
+                               value.get("value"))
+                if nested_result:
+                    return nested_result
+            elif isinstance(value, str) and value.strip():
+                return value
+        
+        return "rejected"
+    elif isinstance(human_response, str):
+        return human_response
+    else:
+        return str(human_response) if human_response else "rejected"
 
 
 def request_clarification(ambiguous_input: str, context: dict = None) -> str:
@@ -111,15 +182,52 @@ def request_clarification(ambiguous_input: str, context: dict = None) -> str:
     Returns:
         str: 澄清后的明确指令
     """
+    confidence = context.get('confidence', 0) if context else 0
+    
     clarification_data = {
         "ambiguous_input": ambiguous_input,
         "context": context or {},
         "query": "请澄清您的具体意图",
         "timestamp": datetime.now().isoformat(),
-        "type": "clarification"
+        "type": "clarification",
+        "ai_message": f"🤔 **需要澄清意图**\n\n"
+                     f"💬 **原始输入**: {ambiguous_input[:100]}{'...' if len(ambiguous_input) > 100 else ''}\n"
+                     f"📊 **理解置信度**: {confidence:.2f}\n\n"
+                     f"📝 **请明确说明**:\n- 您希望我做什么？\n"
+                     f"- 有什么具体的问题或症状吗？\n"
+                     f"- 需要什么帮助？\n\n"
+                     f"⏰ **时间**: {datetime.now().strftime('%H:%M:%S')}"
     }
     human_response = interrupt(clarification_data)
-    return human_response.get("clarification", "")
+    
+    # 处理不同类型的返回值 - 支持嵌套字典格式
+    if isinstance(human_response, dict):
+        # 首先尝试直接键名
+        result = (human_response.get("clarification") or 
+                 human_response.get("response") or 
+                 human_response.get("input") or 
+                 human_response.get("value"))
+        
+        if result:
+            return result
+        
+        # 尝试嵌套字典格式
+        for key, value in human_response.items():
+            if isinstance(value, dict):
+                nested_result = (value.get("clarification") or 
+                               value.get("response") or 
+                               value.get("input") or 
+                               value.get("value"))
+                if nested_result:
+                    return nested_result
+            elif isinstance(value, str) and value.strip():
+                return value
+        
+        return ""
+    elif isinstance(human_response, str):
+        return human_response
+    else:
+        return str(human_response) if human_response else ""
 
 
 
@@ -355,6 +463,17 @@ class IntelligentOpsAgent:
                 
                 current_state = {**state, **updated_state_from_nlu}
                 print(f"✅ NLU直接路由完成 - 任务: {final_task}, 置信度: {nlu_result.confidence:.2f}")
+                
+                # 添加 AI 输出到 messages
+                current_state = self._add_ai_message_to_state(
+                    current_state,
+                    f"🧠 **理解和路由完成**\n\n"
+                    f"🎯 **识别任务**: {final_task}\n"
+                    f"📊 **置信度**: {nlu_result.confidence:.2f}\n"
+                    f"🔍 **提取信息**: {len(nlu_result.extracted_info) if nlu_result.extracted_info else 0} 项\n"
+                    f"⏰ **处理时间**: {datetime.now().strftime('%H:%M:%S')}"
+                )
+                
                 return current_state
 
             # ==================== 备用路由逻辑 ====================
@@ -365,7 +484,11 @@ class IntelligentOpsAgent:
             # 1. 检查是否有明确指定的任务类型
             if state.get("current_task") in valid_tasks:
                 print(f"🎯 明确任务: {state['current_task']}")
-                return {**state, "current_task": state["current_task"]}
+                result_state = {**state, "current_task": state["current_task"]}
+                return self._add_ai_message_to_state(
+                    result_state,
+                    f"🎯 **任务路由**: 明确任务 {state['current_task']}"
+                )
 
             # 2. 使用 DSPy 智能路由作为备选
             try:
@@ -373,10 +496,14 @@ class IntelligentOpsAgent:
                 routing_result = await asyncio.to_thread(self.task_router.forward, user_input)
                 if routing_result.confidence > 0.6:
                     print(f"🎯 DSPy路由: {routing_result.task_type} (置信度: {routing_result.confidence:.2f})")
-                    return {
+                    result_state = {
                         **state,
                         "current_task": routing_result.task_type
                     }
+                    return self._add_ai_message_to_state(
+                        result_state,
+                        f"🎯 **智能路由**: {routing_result.task_type} (置信度: {routing_result.confidence:.2f})"
+                    )
                 else:
                     print(f"⚠️ DSPy 路由置信度不足 ({routing_result.confidence:.2f})")
             except Exception as e:
@@ -385,11 +512,15 @@ class IntelligentOpsAgent:
             # 3. 回退到基于规则的路由
             rule_based_task = self._rule_based_routing(state)
             print(f"🎯 规则路由: {rule_based_task}")
-            return {
+            result_state = {
                 **state,
                 "current_task": rule_based_task,
                 "errors": (state.get("errors") or []) + [f"DSPy routing failed"]
             }
+            return self._add_ai_message_to_state(
+                result_state,
+                f"🎯 **规则路由**: {rule_based_task} (备用方案)"
+            )
 
         except Exception as e:
             # 检查是否是中断异常，如果是则重新抛出
@@ -431,7 +562,7 @@ class IntelligentOpsAgent:
                 historical_alerts=historical_alerts
             )
             
-            return {
+            result_state = {
                 **state,
                 "stage": "alert_processed",
                 "analysis_result": {
@@ -443,6 +574,18 @@ class IntelligentOpsAgent:
                 },
                 "last_update": datetime.now()
             }
+            
+            # 添加 AI 输出到 messages
+            return self._add_ai_message_to_state(
+                result_state,
+                f"🚨 **告警分析完成**\n\n"
+                f"📊 **优先级**: {analysis_result.priority}\n"
+                f"🏷️ **类别**: {analysis_result.category}\n"
+                f"⚡ **紧急度分数**: {analysis_result.urgency_score:.2f}\n"
+                f"🔍 **根因线索**: {len(analysis_result.root_cause_hints)} 项\n"
+                f"💡 **建议操作**: {len(analysis_result.recommended_actions)} 项\n"
+                f"⏰ **分析时间**: {datetime.now().strftime('%H:%M:%S')}"
+            )
             
         except Exception as e:
             return {
@@ -509,6 +652,20 @@ class IntelligentOpsAgent:
             if diagnostic_result.confidence_score < 0.7:
                 print(f"🤔 诊断置信度较低 ({diagnostic_result.confidence_score:.2f})，请求运维人员提供额外信息...")
                 
+                # 先添加 AI 请求消息
+                from langchain_core.messages import AIMessage
+                request_message = AIMessage(
+                    content=f"🤔 **诊断置信度低，需要您的帮助**\n\n"
+                           f"📊 **当前置信度**: {diagnostic_result.confidence_score:.2f}\n"
+                           f"🔍 **初步诊断**: {diagnostic_result.root_cause}\n"
+                           f"🏢 **受影响组件**: {', '.join(diagnostic_result.affected_components)}\n\n"
+                           f"📝 **需要您提供**:\n- 其他线索或观察到的异常\n"
+                           f"- 相关日志信息\n"
+                           f"- 其他可能的原因\n\n"
+                           f"👤 **请输入您的观察**:"
+                )
+                state["messages"] = state.get("messages", []) + [request_message]
+                
                 additional_info = self.request_operator_input(
                     query=f"诊断置信度较低({diagnostic_result.confidence_score:.2f})，请提供额外信息：\n"
                           f"初步诊断：{diagnostic_result.root_cause}\n"
@@ -526,6 +683,11 @@ class IntelligentOpsAgent:
                 if additional_info and additional_info.strip():
                     print(f"📋 收到额外信息，重新进行诊断: {additional_info[:100]}...")
                     
+                    # 将用户的额外输入添加到消息中
+                    from langchain_core.messages import HumanMessage
+                    additional_message = HumanMessage(content=f"补充信息: {additional_info}")
+                    state["messages"] = state.get("messages", []) + [additional_message]
+                    
                     # 增强诊断上下文
                     enhanced_context = DiagnosticContext(
                         alert_analysis=alert_analysis,
@@ -542,8 +704,21 @@ class IntelligentOpsAgent:
                         enhanced_context
                     )
                     print(f"✅ 基于额外信息重新诊断完成，新置信度: {diagnostic_result.confidence_score:.2f}")
+                    
+                    # 添加重新诊断的结果消息
+                    reanalysis_message = AIMessage(
+                        content=f"🔄 **重新诊断完成**\n\n"
+                               f"📊 **新置信度**: {diagnostic_result.confidence_score:.2f}\n"
+                               f"🔍 **更新诊断**: {diagnostic_result.root_cause}\n"
+                               f"📋 **感谢**: 您的补充信息帮助提高了诊断准确性"
+                    )
+                    state["messages"] = state.get("messages", []) + [reanalysis_message]
+                else:
+                    # 调试：条件判断为假
+                    print(f"🔍 DEBUG: 条件判断为假，没有收到有效的额外信息")
+                    print(f"🔍 DEBUG: 保持原始诊断结果，置信度: {diagnostic_result.confidence_score:.2f}")
             
-            return {
+            result_state = {
                 **state,
                 "stage": "diagnosed",
                 "diagnostic_result": {
@@ -558,6 +733,20 @@ class IntelligentOpsAgent:
                 },
                 "last_update": datetime.now()
             }
+            
+            # 添加 AI 输出到 messages
+            return self._add_ai_message_to_state(
+                result_state,
+                f"🩺 **故障诊断完成**\n\n"
+                f"🔍 **根本原因**: {diagnostic_result.root_cause}\n"
+                f"📊 **置信度**: {diagnostic_result.confidence_score:.2f}\n"
+                f"💥 **影响评估**: {diagnostic_result.impact_assessment}\n"
+                f"🏢 **业务影响**: {diagnostic_result.business_impact}\n"
+                f"⏱️ **预计恢复时间**: {diagnostic_result.recovery_time_estimate}\n"
+                f"🔧 **受影响组件**: {', '.join(diagnostic_result.affected_components) if diagnostic_result.affected_components else 'N/A'}\n"
+                f"📋 **证据**: {len(diagnostic_result.evidence)} 项\n"
+                f"⏰ **诊断时间**: {datetime.now().strftime('%H:%M:%S')}"
+            )
             
         except Exception as e:
             # 检查是否是中断异常，如果是则重新抛出
@@ -595,7 +784,7 @@ class IntelligentOpsAgent:
                 context
             )
             
-            return {
+            result_state = {
                 **state,
                 "stage": "planned",
                 "action_plan": {
@@ -629,6 +818,20 @@ class IntelligentOpsAgent:
                 },
                 "last_update": datetime.now()
             }
+            
+            # 添加 AI 输出到 messages
+            return self._add_ai_message_to_state(
+                result_state,
+                f"📋 **行动计划生成完成**\n\n"
+                f"🆔 **计划ID**: {action_plan.plan_id}\n"
+                f"⚡ **优先级**: {action_plan.priority}\n"
+                f"⏱️ **预估时长**: {action_plan.estimated_duration}\n"
+                f"⚠️ **风险评估**: {action_plan.risk_assessment}\n"
+                f"✅ **需要审批**: {'是' if action_plan.approval_required else '否'}\n"
+                f"📝 **执行步骤**: {len(action_plan.steps)} 步\n"
+                f"🔄 **回滚计划**: {len(action_plan.rollback_plan)} 步\n"
+                f"⏰ **规划时间**: {datetime.now().strftime('%H:%M:%S')}"
+            )
             
         except Exception as e:
             return {
@@ -679,8 +882,13 @@ class IntelligentOpsAgent:
                 
                 approval_decision = self.request_execution_approval(action_plan=action_plan)
                 
+                # 将审批结果添加到消息中
+                from langchain_core.messages import HumanMessage
+                approval_message = HumanMessage(content=f"审批决策: {approval_decision}")
+                state["messages"] = state.get("messages", []) + [approval_message]
+                
                 if approval_decision.lower() in ['rejected', 'deny', 'no', 'cancel']:
-                    return {
+                    result_state = {
                         **state,
                         "stage": "execution_rejected",
                         "execution_result": {
@@ -691,9 +899,16 @@ class IntelligentOpsAgent:
                         },
                         "last_update": datetime.now()
                     }
+                    return self._add_ai_message_to_state(
+                        result_state,
+                        f"❌ **执行被拒绝**\n\n"
+                        f"🚫 **拒绝原因**: {approval_decision}\n"
+                        f"📋 **计划ID**: {action_plan.get('plan_id', 'unknown')}\n"
+                        f"⏰ **时间**: {datetime.now().strftime('%H:%M:%S')}"
+                    )
                 elif approval_decision.lower() in ['modified', 'change', 'update']:
                     # 如果用户要求修改，返回到规划阶段
-                    return {
+                    result_state = {
                         **state,
                         "execution_result": {
                             "status": "modification_requested",
@@ -703,11 +918,18 @@ class IntelligentOpsAgent:
                         },
                         "current_task": "plan_actions"
                     }
+                    return self._add_ai_message_to_state(
+                        result_state,
+                        f"🔄 **需要修改计划**\n\n"
+                        f"📝 **修改要求**: {approval_decision}\n"
+                        f"➡️ **返回**: 行动规划阶段\n"
+                        f"⏰ **时间**: {datetime.now().strftime('%H:%M:%S')}"
+                    )
                 else:
                     print(f"✅ 执行已获得审批: {approval_decision}")
             
             if not self.config.auto_execution and not self._requires_execution_approval(action_plan):
-                return {
+                result_state = {
                     **state,
                     "stage": "executed",
                     "execution_result": {
@@ -717,6 +939,13 @@ class IntelligentOpsAgent:
                     },
                     "last_update": datetime.now()
                 }
+                return self._add_ai_message_to_state(
+                    result_state,
+                    f"⚠️ **需要手动审批**\n\n"
+                    f"🔒 **原因**: 自动执行已禁用\n"
+                    f"📋 **计划ID**: {action_plan.get('plan_id', 'unknown')}\n"
+                    f"⏰ **时间**: {datetime.now().strftime('%H:%M:%S')}"
+                )
             
             # 模拟执行过程
             executed_steps = []
@@ -739,7 +968,7 @@ class IntelligentOpsAgent:
             execution_status = "success" if not failed_steps else "partial" if executed_steps else "failed"
             print(f"✅ 执行完成，状态: {execution_status}")
             
-            return {
+            result_state = {
                 **state,
                 "stage": "executed",
                 "execution_result": {
@@ -753,6 +982,19 @@ class IntelligentOpsAgent:
                 "last_update": datetime.now()
             }
             
+            # 添加 AI 输出到 messages
+            status_emoji = "✅" if execution_status == "success" else "⚠️" if execution_status == "partial" else "❌"
+            return self._add_ai_message_to_state(
+                result_state,
+                f"{status_emoji} **执行完成**\n\n"
+                f"📊 **执行状态**: {execution_status}\n"
+                f"📋 **计划ID**: {action_plan.get('plan_id', 'unknown')}\n"
+                f"✅ **成功步骤**: {len(executed_steps)} 步\n"
+                f"❌ **失败步骤**: {len(failed_steps)} 步\n"
+                f"🔐 **审批状态**: {'已获得' if self._requires_execution_approval(action_plan) else '无需审批'}\n"
+                f"⏰ **执行时间**: {datetime.now().strftime('%H:%M:%S')}"
+            )
+            
         except Exception as e:
             # 检查是否是中断异常，如果是则重新抛出
             if "Interrupt" in type(e).__name__ or "interrupt" in str(e).lower():
@@ -763,7 +1005,7 @@ class IntelligentOpsAgent:
         """生成报告节点"""
         try:
             if not self.config.enable_reporting:
-                return {
+                result_state = {
                     **state,
                     "stage": "reported",
                     "report": {
@@ -772,6 +1014,12 @@ class IntelligentOpsAgent:
                     },
                     "last_update": datetime.now()
                 }
+                return self._add_ai_message_to_state(
+                    result_state,
+                    f"📋 **报告生成**: 已禁用\n\n"
+                    f"⚠️ **状态**: 此智能体的报告功能已禁用\n"
+                    f"⏰ **时间**: {datetime.now().strftime('%H:%M:%S')}"
+                )
             
             # 使用 ReportGenerator 生成专业报告
             try:
@@ -834,12 +1082,24 @@ class IntelligentOpsAgent:
                     }
                 }
             
-            return {
+            result_state = {
                 **state,
                 "stage": "reported",
                 "report": report,
                 "last_update": datetime.now()
             }
+            
+            # 添加 AI 输出到 messages
+            return self._add_ai_message_to_state(
+                result_state,
+                f"📋 **运维报告生成完成**\n\n"
+                f"🆔 **事件ID**: {report.get('incident_id', 'unknown')}\n"
+                f"📊 **报告状态**: {report.get('status', 'unknown')}\n"
+                f"📝 **主要发现**: {len(report.get('key_findings', [])) if isinstance(report.get('key_findings'), list) else 'N/A'} 项\n"
+                f"💡 **建议**: {len(report.get('recommendations', [])) if isinstance(report.get('recommendations'), list) else 'N/A'} 项\n"
+                f"🤖 **生成智能体**: {self.config.agent_id}\n"
+                f"⏰ **生成时间**: {datetime.now().strftime('%H:%M:%S')}"
+            )
             
         except Exception as e:
             return {
@@ -949,6 +1209,23 @@ class IntelligentOpsAgent:
     
     # ==================== 辅助函数 ====================
     
+    def _add_ai_message_to_state(self, state: ChatState, content: str) -> ChatState:
+        """添加 AI 消息到状态中"""
+        try:
+            # 检查是否有消息列表（聊天模式）
+            messages = state.get("messages")
+            if messages is not None:
+                from langchain_core.messages import AIMessage
+                ai_message = AIMessage(content=content)
+                return {
+                    **state,
+                    "messages": messages + [ai_message]
+                }
+            # 如果没有消息列表，直接返回原状态（任务模式）
+            return state
+        except Exception as e:
+            print(f"⚠️ 添加 AI 消息失败: {e}")
+            return state
     
     def _create_error_state(self, state: ChatState, error: Exception, node_name: str, 
                            context: Dict[str, Any] = None) -> ChatState:
