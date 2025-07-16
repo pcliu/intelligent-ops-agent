@@ -209,3 +209,8 @@ uv run pytest --cov=src/dspy_modules tests/unit/
 - LangGraph workflows support checkpointing for resumability
 - Use async/await patterns throughout for concurrent processing
 - Monitor token usage with DeepSeek for cost optimization
+
+## Development Notes
+
+- **Virtual Environment Best Practices**:
+  - 运行和安装依赖包等操作需要先激活虚拟环境
