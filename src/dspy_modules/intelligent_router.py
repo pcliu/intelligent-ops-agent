@@ -11,11 +11,9 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-class MessageAnalysisSignature(dspy.Signature):
-    """第一步：分析消息信息，提取告警、症状和上下文"""
-    message_content: str = dspy.InputField(desc="用户消息内容")
-    message_history: str = dspy.InputField(desc="消息历史摘要")
-    current_state: str = dspy.InputField(desc="当前状态摘要")
+class StateAnalysisSignature(dspy.Signature):
+    """分析当前状态，提取告警、症状和上下文信息"""
+    current_state: str = dspy.InputField(desc="当前完整状态（包含messages、业务数据等）")
     
     # 告警信息提取
     has_alert_info: bool = dspy.OutputField(desc="是否包含告警信息")
@@ -34,9 +32,9 @@ class MessageAnalysisSignature(dspy.Signature):
 
 
 class NextStepRoutingSignature(dspy.Signature):
-    """第二步：基于当前信息决定下一步路由"""
-    user_intent: str = dspy.InputField(desc="用户主要意图")
-    available_info: str = dspy.InputField(desc="当前可用信息摘要")
+    """基于状态分析决定下一步路由"""
+    analysis_result: str = dspy.InputField(desc="状态分析结果")
+    current_state: str = dspy.InputField(desc="当前完整状态")
     
     next_task: str = dspy.OutputField(desc="下一步任务: process_alert|diagnose_issue|plan_actions|execute_actions|generate_report|collect_info")
     urgency_level: str = dspy.OutputField(desc="紧急程度: low|medium|high|critical")
@@ -72,29 +70,66 @@ class IntelligentRouter(dspy.Module):
     
     def __init__(self):
         super().__init__()
-        self.message_analyzer = dspy.ChainOfThought(MessageAnalysisSignature)
+        self.state_analyzer = dspy.ChainOfThought(StateAnalysisSignature)
         self.next_step_router = dspy.ChainOfThought(NextStepRoutingSignature)
     
-    def forward(self, user_input: str, current_state: Dict[str, Any]) -> RouterDecision:
-        """处理用户输入，提取信息并决定下一步"""
+    def forward(self, current_state: Dict[str, Any]) -> RouterDecision:
+        """分析当前状态，提取信息并决定下一步"""
         
-        # Step 1: 分析消息，提取告警、症状和上下文信息
-        analysis = self.message_analyzer(
-            message_content=user_input,
-            message_history=self._extract_recent_messages(current_state),
-            current_state=self._serialize_state(current_state)
+        # Step 1: 分析当前状态，提取告警、症状和上下文信息
+        state_str = self._serialize_complete_state(current_state)
+        analysis = self.state_analyzer(
+            current_state=state_str
         )
         
         # Step 2: 基于分析结果决定下一步路由
-        available_info = self._build_available_info_summary(analysis, current_state)
-        user_intent = self._infer_user_intent(user_input, analysis)
-        
         routing = self.next_step_router(
-            user_intent=user_intent,
-            available_info=available_info
+            analysis_result=analysis.reasoning,
+            current_state=state_str
         )
         
-        return self._build_router_decision(analysis, routing, user_input)
+        return self._build_router_decision(analysis, routing)
+    
+    def _serialize_complete_state(self, state: Dict[str, Any]) -> str:
+        """将当前完整状态序列化为文本"""
+        result = []
+        
+        # 消息历史（包含用户输入）
+        messages = state.get("messages", [])
+        if messages:
+            result.append(f"=== 消息历史 ===")
+            for i, msg in enumerate(messages[-5:], 1):  # 只取最近的5条
+                if hasattr(msg, 'content'):
+                    msg_type = "AI" if hasattr(msg, 'type') and msg.type == "ai" else "Human"
+                    result.append(f"{i}. {msg_type}: {msg.content[:200]}")
+            result.append("")
+        
+        # 业务数据状态
+        result.append(f"=== 业务数据状态 ===")
+        
+        # 告警信息
+        if state.get("alert_info"):
+            alert = state["alert_info"]
+            if hasattr(alert, '__dict__'):
+                result.append(f"告警: {alert.severity} - {alert.message}")
+            else:
+                result.append(f"告警: {alert}")
+        
+        # 症状信息
+        if state.get("symptoms"):
+            result.append(f"症状: {state['symptoms']}")
+        
+        # 上下文信息
+        if state.get("context"):
+            result.append(f"上下文: {state['context']}")
+        
+        # 其他业务数据
+        business_fields = ['analysis_result', 'diagnostic_result', 'action_plan', 'execution_result', 'report']
+        for field in business_fields:
+            if state.get(field):
+                result.append(f"{field}: 已存在")
+        
+        return "\n".join(result)
     
     def _extract_recent_messages(self, state: Dict[str, Any]) -> str:
         """提取最近的消息历史"""
@@ -182,7 +217,7 @@ class IntelligentRouter(dspy.Module):
             else:
                 return "issue_diagnosis"
     
-    def _build_router_decision(self, analysis, routing, user_input: str) -> RouterDecision:
+    def _build_router_decision(self, analysis, routing) -> RouterDecision:
         """构建路由决策结果"""
         try:
             # 构建告警信息
@@ -192,7 +227,7 @@ class IntelligentRouter(dspy.Module):
                     "alert_id": f"msg_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                     "timestamp": datetime.now().isoformat(),
                     "severity": analysis.alert_severity,
-                    "source": analysis.alert_source or "user_input",
+                    "source": analysis.alert_source or "intelligent_router",
                     "message": analysis.alert_message,
                     "metrics": self._parse_json_safe(analysis.alert_metrics),
                     "tags": ["extracted_from_message"]

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Architecture
 
-This is an **Intelligent Operations Agent** system that combines **LangGraph** for workflow orchestration and **DSPy** for modular reasoning. The system implements a simplified architecture:
+This is an **Intelligent Operations Agent** system that combines **LangGraph** for workflow orchestration and **DSPy** for modular reasoning. The system implements a unified, state-driven architecture:
 
 1. **LangGraph Workflow Layer**: State-driven orchestration integrated in `src/agents/intelligent_ops_agent.py`
 2. **DSPy Reasoning Layer**: Modular AI components (`src/dspy_modules/`)
@@ -18,18 +18,27 @@ The system is built around five main DSPy modules that implement Chain-of-Though
 - **DiagnosticAgent**: Performs root cause analysis and impact assessment
 - **ActionPlanner**: Generates recovery strategies with risk assessment
 - **ReportGenerator**: Creates incident reports and performance analysis
-- **TaskRouter**: Routes tasks based on user input analysis
-- **NaturalLanguageUnderstanding**: Extracts structured information from user input
+- **IntelligentRouter**: Analyzes complete state and routes to appropriate business nodes
 
 Each module extends `dspy.Module` and uses `dspy.ChainOfThought` for reasoning with structured signatures.
 
 ### LangGraph Workflow
 
-The workflow follows a state-driven pattern using `StateGraph(ChatState)` with these main nodes:
+The workflow follows a unified state-driven pattern using `StateGraph(ChatState)` with these main nodes:
 
 ```
-initialize → understand_and_route → [process_alert | diagnose_issue | plan_actions | execute_actions | generate_report] → finalize
+initialize → router → [business_nodes | collect_info] → router → finalize
 ```
+
+**Business Flow Order**: `process_alert → diagnose_issue → plan_actions → execute_actions → generate_report`
+
+**Information Collection Pattern**: When business nodes lack prerequisites → `collect_info` → updates `messages` → `router` → re-routes
+
+**Core Architecture Principles**:
+- **State is the single source of truth**: All business data and processing results are in `ChatState`
+- **Messages are for user interaction**: Used for collecting additional information, can be empty
+- **Router is the central hub**: Analyzes complete state and routes to appropriate nodes
+- **Unified information collection**: All information gathering goes through `collect_info` node
 
 All workflow nodes are integrated in the `IntelligentOpsAgent` class in `src/agents/intelligent_ops_agent.py` and use async/await patterns with comprehensive error handling and human intervention support.
 
@@ -127,6 +136,18 @@ class ModuleName(dspy.Module):
         # Implementation with structured reasoning
 ```
 
+### Router Module Pattern
+```python
+# Router DSPy module only receives complete state
+class IntelligentRouter(dspy.Module):
+    def forward(self, current_state: Dict[str, Any]) -> RouterDecision:
+        # Analyze complete state including messages and business data
+        state_str = self._serialize_complete_state(current_state)
+        analysis = self.state_analyzer(current_state=state_str)
+        routing = self.next_step_router(analysis_result=analysis.reasoning, current_state=state_str)
+        return self._build_router_decision(analysis, routing)
+```
+
 ### LangGraph Node Pattern
 ```python
 async def _node_function(self, state: ChatState) -> ChatState:
@@ -143,7 +164,10 @@ async def _node_function(self, state: ChatState) -> ChatState:
 ### State Management
 - Use `ChatState` (TypedDict) for all workflow state
 - State includes: messages, alert_info, symptoms, context, analysis_result, diagnostic_result, action_plan, execution_result, report
-- Support for LangGraph Studio chat interface with `messages` field
+- **Core business data**: alert_info, symptoms, context, diagnostic_result, action_plan, etc.
+- **User interaction data**: messages field for LangGraph Studio chat interface
+- **Unified information flow**: Router extracts info from messages and updates business data
+- **Information collection**: `collect_info` node handles all user input gathering
 - Human intervention support through interrupt functions
 
 ## Dependencies and Integration
@@ -202,6 +226,8 @@ uv run pytest --cov=src/dspy_modules tests/unit/
 - Enable debug logging: `LOG_LEVEL="DEBUG"` in environment
 - Use LangGraph Studio for visual workflow debugging
 - Monitor interrupt points for human intervention
+- **Router debugging**: Check `state.get("_target_node")` for routing decisions
+- **Information collection**: Monitor `collect_info` → `router` → business node cycles
 
 ## Performance Considerations
 
@@ -209,8 +235,17 @@ uv run pytest --cov=src/dspy_modules tests/unit/
 - LangGraph workflows support checkpointing for resumability
 - Use async/await patterns throughout for concurrent processing
 - Monitor token usage with DeepSeek for cost optimization
+- **Unified state processing**: Router processes complete state in single DSPy call
+- **Efficient information collection**: Centralized `collect_info` node reduces redundant processing
 
 ## Development Notes
 
 - **Virtual Environment Best Practices**:
   - 运行和安装依赖包等操作需要先激活虚拟环境
+
+- **Architecture Design Principles**:
+  - **State-driven**: All information is in `ChatState`, DSPy modules receive complete state
+  - **Unified routing**: Router node is the central decision point for all flow control
+  - **Centralized info collection**: `collect_info` node handles all user input gathering
+  - **Business data focus**: Core state contains business data, messages are auxiliary
+  - **Simplified flow**: Missing prerequisites → `collect_info` → `router` → business node
