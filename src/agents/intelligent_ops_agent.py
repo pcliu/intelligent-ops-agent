@@ -33,7 +33,7 @@ class AgentConfig:
     max_retries: int = 3
     timeout: int = 300
     enable_reporting: bool = True
-    auto_execution: bool = False
+    auto_execution: bool = True
 
 
 class ChatState(TypedDict):
@@ -1372,7 +1372,7 @@ _default_studio_config = AgentConfig(
     agent_type="general", 
     specialization="studio_demo",
     enable_reporting=True,
-    auto_execution=False
+    auto_execution=True 
 )
 
 # 创建智能体实例并编译图
