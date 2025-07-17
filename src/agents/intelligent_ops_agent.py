@@ -68,13 +68,16 @@ def request_operator_input(query: str, context: dict = None) -> str:
     Returns:
         str: 运维人员的回复
     """
+    # 使用 LangGraph 的 interrupt() 函数来中断工作流并等待用户输入
     interrupt_data = {
         "query": query,
         "context": context or {},
         "timestamp": datetime.now().isoformat(),
         "type": "operator_input",
-        "ai_message": f"🤖 **需要您的输入**\n\n💬 **问题**: {query}\n\n⏰ **时间**: {datetime.now().strftime('%H:%M:%S')}"
+        "message": f"🤖 **需要您的输入**\n\n💬 **问题**: {query}\n\n⏰ **时间**: {datetime.now().strftime('%H:%M:%S')}"
     }
+    
+    # 中断工作流并等待用户响应
     human_response = interrupt(interrupt_data)
     
     # 处理不同类型的返回值 - LangGraph Studio 返回格式兼容
@@ -289,6 +292,7 @@ class IntelligentOpsAgent:
             {
                 "finalize": "finalize",              # 正常流程：完成
                 "collect_info": "collect_info",      # 异常处理：收集信息
+                "generate_report": "generate_report",
                 "error": "error_handler"
             }
         )
@@ -326,8 +330,8 @@ class IntelligentOpsAgent:
             compile_kwargs = {}
             if checkpointer:
                 compile_kwargs["checkpointer"] = checkpointer
-                # 可选：添加静态断点
-                compile_kwargs["interrupt_before"] = ["execute_actions"]
+                # 添加中断点：在信息收集和执行操作前中断
+                #compile_kwargs["interrupt_before"] = ["collect_info", "execute_actions"]
             
             self.compiled_graph = self.graph.compile(**compile_kwargs)
         return self.compiled_graph
@@ -378,9 +382,8 @@ class IntelligentOpsAgent:
             return updated_state
             
         except Exception as e:
-            # 检查是否是中断异常，如果是则重新抛出
-            if "Interrupt" in type(e).__name__ or "interrupt" in str(e).lower():
-                raise
+            # 不要捕获中断异常，让它们正常传播
+            # 只处理真正的错误
             return self._create_error_state(state, e, "router")
     
     def _route_based_on_business_data(self, state: ChatState) -> ChatState:
@@ -415,35 +418,35 @@ class IntelligentOpsAgent:
         return self._add_ai_message_to_state(updated_state, analysis_message)
     
     async def _collect_info_node(self, state: ChatState) -> ChatState:
-        """信息收集节点 - 通过interrupt()收集用户补充信息"""
+        """信息收集节点 - 通过request_operator_input收集用户补充信息"""
         try:
             # 获取上一个节点传递的信息需求
             messages = state.get("messages", [])
-            info_request = "请提供更多信息以继续处理"
+            info_request = "📝 **需要补充信息**\n\n请提供更多详细信息以继续智能诊断："
             
             if messages:
                 last_message = messages[-1]
-                if hasattr(last_message, 'content') and "需要补充信息" in last_message.content:
+                if hasattr(last_message, 'content') and ("需要补充信息" in last_message.content or "请提供" in last_message.content):
                     info_request = last_message.content
             
-            # 通过interrupt()收集用户信息
-            try:
-                additional_info = request_operator_input(
-                    query=info_request,
-                    context={
-                        "type": "info_collection",
-                        "current_state": state,
-                        "timestamp": datetime.now().isoformat()
-                    }
-                )
-            except Exception as e:
-                # 在测试环境中模拟用户输入
-                print(f"⚠️ 中断功能不可用（测试环境）: {e}")
-                additional_info = "模拟用户输入：请提供更多详细信息。"
+            # 使用 request_operator_input 函数收集用户信息
+            # 这会调用 interrupt() 并在 LangGraph Studio 中显示输入提示
+            additional_info = request_operator_input(
+                query=info_request,
+                context={
+                    "type": "info_collection",
+                    "current_state": "collect_info_node",
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+            
+            # 如果返回空值，提供默认信息
+            if not additional_info:
+                additional_info = "用户未提供额外信息"
             
             # 将收集到的信息添加到messages
             from langchain_core.messages import HumanMessage
-            new_message = HumanMessage(content=additional_info)
+            new_message = HumanMessage(content=str(additional_info))
             
             messages = state.get("messages") or []
             updated_state = {
@@ -454,6 +457,8 @@ class IntelligentOpsAgent:
             return updated_state
             
         except Exception as e:
+            if "Interrupt" in type(e).__name__ or "interrupt" in str(e).lower():
+                raise
             return self._create_error_state(state, e, "collect_info")
     
     async def _process_alert_node(self, state: ChatState) -> ChatState:
@@ -660,9 +665,6 @@ class IntelligentOpsAgent:
             )
             
         except Exception as e:
-            # 检查是否是中断异常，如果是则重新抛出
-            if "Interrupt" in type(e).__name__ or "interrupt" in str(e).lower():
-                raise
             return self._create_error_state(state, e, "diagnose_issue")
     
     async def _plan_actions_node(self, state: ChatState) -> ChatState:
@@ -899,7 +901,6 @@ class IntelligentOpsAgent:
             )
             
         except Exception as e:
-            # 检查是否是中断异常，如果是则重新抛出
             if "Interrupt" in type(e).__name__ or "interrupt" in str(e).lower():
                 raise
             return self._create_error_state(state, e, "execute_actions")

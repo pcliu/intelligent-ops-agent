@@ -11,3 +11,4 @@ wheels/
 .env
 intelligent-ops-chat-ui/
 .langgraph_api
+.kiro

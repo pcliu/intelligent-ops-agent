@@ -1,40 +1,53 @@
 # 智能运维智能体 (Intelligent Operations Agent)
 
-基于 LangGraph 和 DSPy 框架构建的智能运维系统，实现智能化的故障诊断、自动化运维和持续学习优化。
+**基于 LangGraph 和 DSPy 的状态驱动智能运维系统**
 
-## 🌟 项目特性
+结合工作流编排和模块化推理，实现智能化的运维决策、故障诊断和自动化处理。
 
-### 核心能力
-- **🔄 工作流编排**: 基于 LangGraph 的智能运维工作流
-- **🧠 模块化推理**: 使用 DSPy 优化推理和决策过程
-- **🤖 多智能体协作**: 支持专业化智能体的协同工作
-- **📊 智能诊断**: 自动化根因分析和影响评估
-- **📋 行动规划**: 智能生成修复策略和执行计划
-- **📈 持续学习**: 从运维经验中学习和优化
-- **📄 报告生成**: 自动化生成运维报告和知识积累
+## ✨ 核心特性
 
-### 技术架构
+### 🎯 智能化运维能力
+- **🔄 状态驱动工作流**: 基于 LangGraph 的统一状态管理
+- **🧠 模块化推理**: 使用 DSPy 优化决策过程
+- **🎯 智能路由**: 基于完整状态的智能决策路由
+- **📊 自动化诊断**: 根因分析和影响评估
+- **🛠️ 行动规划**: 智能生成修复策略
+- **📈 中断恢复**: 支持人工干预和工作流恢复
+
+### 🏗️ 统一架构设计
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                   智能运维智能体系统                              │
+│                      智能运维智能体系统                            │
+│                   (State-Driven Architecture)                   │
 ├─────────────────────────────────────────────────────────────────┤
-│  LangGraph 工作流编排层                                         │
+│  LangGraph 工作流编排层 (统一在 IntelligentOpsAgent 中)          │
 │  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  监控数据采集  →  告警处理  →  故障诊断  →  自动化执行       │ │
-│  │       ↓           ↓           ↓           ↓                 │ │
-│  │  状态管理    →  决策节点   →  执行节点  →  反馈学习          │ │
+│  │  initialize → router → [business_nodes | collect_info]      │ │
+│  │                 ↓                                           │ │
+│  │  process_alert → diagnose_issue → plan_actions              │ │
+│  │                 ↓                                           │ │
+│  │  execute_actions → generate_report → finalize               │ │
 │  └─────────────────────────────────────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────────────┤
-│  DSPy 模块化推理层                                              │
+│  DSPy 模块化推理层 (Chain-of-Thought)                           │
 │  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  AlertAnalyzer  │  DiagnosticAgent  │  ActionPlanner        │ │
-│  │       ↓              ↓                    ↓                 │ │
-│  │  推理优化    │   根因分析        │   策略生成                │ │
+│  │  IntelligentRouter  │  AlertAnalyzer  │  DiagnosticAgent   │ │
+│  │         ↓                   ↓                   ↓           │ │
+│  │  状态路由决策       │  告警分析分类   │   根因分析        │ │
+│  │                                                             │ │
+│  │  ActionPlanner    │  ReportGenerator                       │ │
+│  │         ↓                   ↓                               │ │
+│  │  策略生成规划     │   报告生成                             │ │
 │  └─────────────────────────────────────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────────────┤
-│  基础设施层                                                     │
+│  统一状态管理层 (ChatState)                                     │
 │  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  监控系统    │  知识库        │  执行引擎      │  日志系统    │ │
+│  │  messages        │  alert_info     │  symptoms           │ │
+│  │  (用户交互)      │  (业务数据)     │  (诊断信息)         │ │
+│  │                                                             │ │
+│  │  diagnostic_result │ action_plan    │  execution_result  │ │
+│  │  (诊断结果)        │ (执行计划)     │  (执行结果)        │ │
 │  └─────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -42,318 +55,296 @@
 ## 🚀 快速开始
 
 ### 环境要求
-- Python 3.8+
-- LangGraph >= 0.2.0
-- DSPy >= 2.4.0
-- LangChain >= 0.2.0
+- **Python 3.11+**
+- **uv** (现代 Python 包管理器)
+- **DeepSeek API Key** (推荐，成本低且中文友好)
 
-### 安装依赖
+### 1. 安装 uv 包管理器
+```bash
+# macOS 和 Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# 或使用 pip
+pip install uv
+```
+
+### 2. 项目设置
 ```bash
 # 克隆项目
 git clone <repository-url>
 cd intelligent-ops-agent
 
-# 安装依赖
-pip install -r requirements.txt
+# 创建虚拟环境并安装依赖
+uv sync
+
+# 激活虚拟环境
+source .venv/bin/activate  # Linux/macOS
+# 或 .venv\Scripts\activate  # Windows
 ```
 
-### 基础使用示例
-```python
-import asyncio
-from src.agents.intelligent_ops_agent import IntelligentOpsAgent, AgentConfig
-from src.dspy_modules.alert_analyzer import AlertInfo
-
-# 创建智能体配置
-config = AgentConfig(
-    agent_id="ops_agent_001",
-    agent_type="general",
-    specialization="system_performance",
-    enable_learning=True,
-    enable_reporting=True
-)
-
-# 创建智能体
-agent = IntelligentOpsAgent(config)
-
-# 创建告警信息
-alert = AlertInfo(
-    alert_id="cpu_spike_001",
-    timestamp="2024-01-01T12:00:00Z",
-    severity="high",
-    source="system_monitor",
-    message="CPU usage exceeded 90% threshold",
-    metrics={"cpu_usage": 0.95},
-    tags=["cpu", "performance"]
-)
-
-# 处理告警
-async def main():
-    result = await agent.process_alert(alert)
-    print(f"处理结果: {result['status']}")
-
-asyncio.run(main())
-```
-
-## 📖 详细文档
-
-### 项目结构
-```
-intelligent-ops-agent/
-├── src/
-│   ├── dspy_modules/          # DSPy 模块化推理组件
-│   │   ├── alert_analyzer.py     # 告警分析器
-│   │   ├── diagnostic_agent.py   # 诊断智能体
-│   │   ├── action_planner.py     # 行动规划器
-│   │   └── report_generator.py   # 报告生成器
-│   ├── langgraph_workflow/    # LangGraph 工作流
-│   │   ├── ops_workflow.py       # 主工作流
-│   │   ├── workflow_nodes.py     # 工作流节点
-│   │   └── state_manager.py      # 状态管理器
-│   └── agents/                # 智能体实现
-│       └── intelligent_ops_agent.py  # 主智能体类
-├── examples/                  # 使用示例
-│   ├── basic_usage.py            # 基础使用示例
-│   ├── multi_agent_scenario.py  # 多智能体场景
-│   └── complete_demo.py          # 完整功能演示
-├── tests/                     # 测试文件
-├── docs/                      # 文档
-│   └── architecture.md           # 架构设计文档
-└── requirements.txt           # 依赖列表
-```
-
-### 核心组件说明
-
-#### 1. DSPy 模块化推理组件
-
-**AlertAnalyzer (告警分析器)**
-- 告警信息解析和分类
-- 紧急程度评估
-- 告警关联分析
-- 根因提示生成
-
-**DiagnosticAgent (诊断智能体)**
-- 根因分析
-- 影响范围评估
-- 历史案例检索
-- 诊断报告生成
-
-**ActionPlanner (行动规划器)**
-- 修复策略生成
-- 风险评估
-- 执行步骤规划
-- 回滚计划制定
-
-**ReportGenerator (报告生成器)**
-- 事件报告生成
-- 性能分析报告
-- 趋势分析
-- 优化建议
-
-#### 2. LangGraph 工作流编排
-
-**工作流阶段**
-- `monitoring`: 监控数据采集
-- `alerting`: 告警处理
-- `diagnosis`: 故障诊断
-- `planning`: 行动规划
-- `execution`: 自动化执行
-- `reporting`: 报告生成
-
-**状态管理**
-- 工作流状态跟踪
-- 错误处理和重试
-- 状态持久化
-- 历史记录管理
-
-#### 3. 智能体系统
-
-**单智能体模式**
-- 独立处理运维任务
-- 完整的工作流执行
-- 自主学习和优化
-
-**多智能体协作模式**
-- 专业化智能体分工
-- 协作处理复杂问题
-- 知识共享和整合
-
-## 💡 使用场景
-
-### 1. 系统监控和告警处理
-```python
-# 处理CPU使用率告警
-cpu_alert = AlertInfo(
-    alert_id="cpu_high_001",
-    severity="high",
-    message="CPU usage exceeding threshold",
-    metrics={"cpu_usage": 0.95}
-)
-
-result = await agent.process_alert(cpu_alert)
-```
-
-### 2. 故障诊断和根因分析
-```python
-# 基于症状进行诊断
-symptoms = [
-    "API response time increased",
-    "Database connection timeouts",
-    "Memory usage gradually increasing"
-]
-
-diagnosis = await agent.diagnose_issue(symptoms, context)
-```
-
-### 3. 自动化行动规划
-```python
-# 生成修复计划
-action_plan = await agent.plan_actions(diagnostic_result, system_context)
-```
-
-### 4. 多智能体协作
-```python
-# 创建专业化智能体
-network_agent = IntelligentOpsAgent(AgentConfig(
-    agent_id="network_specialist",
-    agent_type="network",
-    specialization="network_diagnostics"
-))
-
-security_agent = IntelligentOpsAgent(AgentConfig(
-    agent_id="security_specialist", 
-    agent_type="security",
-    specialization="security_response"
-))
-```
-
-## 🎯 运行示例
-
-### 基础功能演示
+### 3. 配置环境
 ```bash
-python examples/basic_usage.py
-```
+# 复制配置模板
+cp .env.example .env
 
-### 多智能体协作演示
-```bash
-python examples/multi_agent_scenario.py
-```
-
-### 完整功能演示
-```bash
-python examples/complete_demo.py
-```
-
-## 🧪 测试
-
-```bash
-# 运行单元测试
-python -m pytest tests/unit/
-
-# 运行集成测试
-python -m pytest tests/integration/
-
-# 代码格式检查
-python -m black .
-python -m isort .
-python -m flake8 .
-```
-
-## 🔧 配置
-
-### 环境变量
-```bash
-# DSPy 配置
-export DSPY_LANGUAGE_MODEL="your-llm-provider"
-export DSPY_API_KEY="your-api-key"
-
-# LangGraph 配置
-export LANGGRAPH_CONFIG_PATH="path/to/config.yaml"
-
-# 日志配置
-export LOG_LEVEL="INFO"
-export LOG_FORMAT="json"
-```
-
-### 配置文件示例
-```bash
-# .env 配置文件
-# DeepSeek LLM 配置（推荐 - 成本低，中文友好）
+# 编辑 .env 文件，配置 DeepSeek API
 DEEPSEEK_API_KEY="your-deepseek-api-key-here"
 LLM_PROVIDER="deepseek"
 LLM_MODEL_NAME="deepseek-chat"
 LLM_BASE_URL="https://api.deepseek.com/v1"
 LLM_TEMPERATURE="0.1"
 LLM_MAX_TOKENS="2000"
-
-# LangGraph 配置
-LANGGRAPH_MAX_ITERATIONS="100"
-LANGGRAPH_TIMEOUT="300"
-LANGGRAPH_ENABLE_CHECKPOINTS="true"
-
-# 智能体配置
-AGENT_ENABLE_LEARNING="true"
-AGENT_ENABLE_REPORTING="true"
-AGENT_AUTO_EXECUTION="false"
-AGENT_MAX_RETRIES="3"
 ```
 
-### DeepSeek 快速配置指南
-1. **获取 API Key**: 访问 [DeepSeek 官网](https://www.deepseek.com/) 注册并获取 API Key
-2. **配置环境**: 复制 `.env.example` 为 `.env` 并填入您的 API Key
-3. **测试连接**: 运行 `python examples/deepseek_test.py` 验证配置
+### 4. 验证安装
+```bash
+# 测试 DeepSeek 连接
+python examples/deepseek_test.py
 
-详细的 DeepSeek 集成说明请参考 [DeepSeek 集成指南](docs/deepseek_integration.md)。
+# 运行基础示例
+python examples/basic_usage.py
+```
 
-## 📈 性能监控
+## 💡 核心概念
 
-### 指标收集
-- 智能体响应时间
-- 诊断准确率
-- 自动化成功率
-- 用户满意度
+### 状态驱动架构
+系统采用统一的 `ChatState` 作为唯一数据源：
+- **业务数据**: `alert_info`, `symptoms`, `diagnostic_result`, `action_plan` 等
+- **用户交互**: `messages` 字段用于 LangGraph Studio 聊天界面
+- **智能路由**: Router 分析完整状态，决定下一步执行节点
 
-### 监控仪表板
-- 实时工作流状态
+### 工作流程
+1. **初始化** → **智能路由** → **业务节点**
+2. **信息缺失** → **收集信息** → **更新状态** → **重新路由**
+3. **完整流程**: `告警处理` → `故障诊断` → `行动规划` → `执行操作` → `生成报告`
+
+## 🛠️ 使用示例
+
+### 基础告警处理
+```python
+import asyncio
+from src.agents.intelligent_ops_agent import IntelligentOpsAgent
+from src.utils.state_models import ChatState, AlertInfo
+
+# 创建智能体
+agent = IntelligentOpsAgent()
+
+# 创建告警状态
+state = ChatState(
+    messages=[],
+    alert_info=AlertInfo(
+        alert_id="cpu_high_001",
+        timestamp="2024-01-01T12:00:00Z",
+        severity="high",
+        source="prometheus",
+        message="CPU usage exceeded 90% for 5 minutes",
+        metrics={"cpu_usage": 0.95, "duration": 300},
+        tags=["cpu", "performance", "critical"]
+    )
+)
+
+# 运行工作流
+async def main():
+    result = await agent.run_workflow(state)
+    print(f"处理完成: {result.get('report', {}).get('summary', 'No report')}")
+
+asyncio.run(main())
+```
+
+### 交互式诊断 (LangGraph Studio)
+```python
+# 在 LangGraph Studio 中使用
+# 系统会自动处理中断和人工干预
+
+# 1. 启动工作流
+initial_state = ChatState(messages=[], alert_info=alert_data)
+
+# 2. 系统自动路由到合适的处理节点
+# 3. 如需额外信息，会中断并请求用户输入
+# 4. 用户提供信息后，系统继续处理
+# 5. 生成最终的诊断报告和行动计划
+```
+
+### 多步骤诊断场景
+```python
+# 复杂故障诊断
+complex_state = ChatState(
+    messages=[],
+    symptoms=[
+        "API 响应时间增加到 5 秒",
+        "数据库连接池耗尽",
+        "内存使用率持续上升",
+        "错误日志显示 OutOfMemoryError"
+    ],
+    context={
+        "system_type": "微服务架构",
+        "peak_traffic": True,
+        "recent_deployments": ["user-service-v2.1", "payment-service-v1.3"]
+    }
+)
+
+# 运行诊断流程
+diagnosis_result = await agent.run_workflow(complex_state)
+```
+
+## 📁 项目结构
+
+```
+intelligent-ops-agent/
+├── src/
+│   ├── agents/
+│   │   └── intelligent_ops_agent.py    # 统一工作流实现
+│   ├── dspy_modules/                    # DSPy 推理模块
+│   │   ├── __init__.py
+│   │   ├── intelligent_router.py       # 智能路由器
+│   │   ├── alert_analyzer.py           # 告警分析器
+│   │   ├── diagnostic_agent.py         # 诊断智能体
+│   │   ├── action_planner.py           # 行动规划器
+│   │   └── report_generator.py         # 报告生成器
+│   ├── langgraph_workflow/             # LangGraph 工作流(保留目录)
+│   └── utils/
+│       ├── __init__.py
+│       └── llm_config.py               # LLM 配置管理
+├── examples/                           # 使用示例
+│   └── quick_deepseek_test.py          # DeepSeek 配置测试
+├── tests/                             # 测试套件
+│   ├── unit/                          # 单元测试(空)
+│   └── integration/                   # 集成测试(空)
+├── scripts/                           # 脚本工具
+│   ├── setup_chat_ui_manual.sh        # 聊天界面设置
+│   └── start_server.sh                # 服务器启动脚本
+├── docs/                              # 文档
+│   └── studio_test_examples.md        # Studio 测试示例
+├── intelligent-ops-chat-ui/           # 聊天界面(可选)
+├── pyproject.toml                     # 项目配置
+├── uv.lock                            # 依赖锁文件
+├── langgraph.json                     # LangGraph 配置
+├── requirements.txt                   # 依赖列表
+├── CLAUDE.md                          # Claude Code 项目指南
+└── README.md                          # 项目说明
+```
+
+## 🔧 开发工具
+
+### 依赖管理
+```bash
+# 安装生产依赖
+uv sync
+
+# 安装开发依赖
+uv sync --extra dev
+
+# 添加新依赖
+uv add package-name
+uv add --dev package-name  # 开发依赖
+
+# 移除依赖
+uv remove package-name
+```
+
+### 代码质量
+```bash
+# 激活虚拟环境
+source .venv/bin/activate
+
+# 代码格式化
+uv run black .
+uv run isort .
+
+# 代码检查
+uv run flake8 .
+uv run mypy src/
+
+# 运行测试
+uv run pytest tests/unit/
+uv run pytest tests/integration/
+uv run pytest --cov=src --cov-report=html
+```
+
+## 🎛️ 配置选项
+
+### DeepSeek (推荐)
+```bash
+DEEPSEEK_API_KEY="your-api-key"
+LLM_PROVIDER="deepseek"
+LLM_MODEL_NAME="deepseek-chat"
+LLM_BASE_URL="https://api.deepseek.com/v1"
+```
+
+### 其他 LLM 提供商
+```bash
+# OpenAI
+LLM_PROVIDER="openai"
+OPENAI_API_KEY="your-openai-key"
+LLM_MODEL_NAME="gpt-4"
+
+# 本地 Ollama
+LLM_PROVIDER="ollama"
+OLLAMA_BASE_URL="http://localhost:11434"
+LLM_MODEL_NAME="llama3"
+```
+
+## 🔍 核心模块详解
+
+### 1. IntelligentRouter (智能路由器)
+- 分析完整的 ChatState 状态
+- 基于业务数据和用户交互决定下一步
+- 支持信息收集和业务节点的智能切换
+
+### 2. AlertAnalyzer (告警分析器)
+- 告警分类和优先级评估
+- 关联分析和根因提示
+- 输出结构化的告警信息
+
+### 3. DiagnosticAgent (诊断智能体)
+- 基于症状的根因分析
+- 影响范围评估
+- 历史案例匹配
+
+### 4. ActionPlanner (行动规划器)
+- 生成修复策略
+- 风险评估和回滚计划
+- 执行步骤规划
+
+### 5. ReportGenerator (报告生成器)
+- 事件总结和分析报告
 - 性能趋势分析
-- 错误率统计
-- 资源使用情况
+- 优化建议生成
 
-## 🔒 安全考虑
+## 🚀 运行示例
 
-### 访问控制
-- 基于角色的权限管理
-- API 密钥认证
-- 操作审计日志
+```bash
+# 基础功能演示
+python examples/basic_usage.py
 
-### 数据保护
-- 敏感信息脱敏
-- 加密存储
-- 安全传输
+# 完整功能演示 (包含多步诊断)
+python examples/complete_demo.py
+
+# DeepSeek 配置验证
+python examples/deepseek_test.py
+```
 
 ## 🤝 贡献指南
 
 1. Fork 本项目
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
+2. 创建功能分支: `git checkout -b feature/amazing-feature`
+3. 提交更改: `git commit -m 'Add amazing feature'`
+4. 推送分支: `git push origin feature/amazing-feature`
+5. 提交 Pull Request
 
 ## 📄 许可证
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+本项目采用 MIT 许可证。详见 [LICENSE](LICENSE) 文件。
 
 ## 🙏 致谢
 
-- [LangGraph](https://github.com/langchain-ai/langgraph) - 工作流编排框架
-- [DSPy](https://github.com/stanfordnlp/dspy) - 模块化推理框架
-- [LangChain](https://github.com/langchain-ai/langchain) - 基础框架支持
-
-## 📞 联系我们
-
-- 项目主页: [GitHub Repository]
-- 问题反馈: [GitHub Issues]
-- 文档: [Documentation Site]
+- **[LangGraph](https://github.com/langchain-ai/langgraph)** - 工作流编排框架
+- **[DSPy](https://github.com/stanfordnlp/dspy)** - 模块化推理框架  
+- **[DeepSeek](https://www.deepseek.com/)** - 高性价比 LLM 服务
 
 ---
 
-**智能运维智能体** - 让运维更智能，让系统更可靠！ 🚀
+**智能运维智能体** - 让运维决策更智能，让故障处理更高效！ 🚀

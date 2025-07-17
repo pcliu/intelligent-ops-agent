@@ -1,4 +1,0 @@
- 1. 入口点：initialize → router
-  2. Router判断：根据分析结果跳转到某个业务节点
-  3. 正常流程：process_alert → diagnose_issue → plan_actions → execute_actions → finalize
-  4. 异常处理：业务节点缺少前置状态时 → collect_info → 更新 messages → router → 重新路由
