@@ -36,10 +36,8 @@
   ```
   src/memory/
   ├── __init__.py
-  ├── ops_memory_agent.py      # 主要记忆智能体
   ├── graphiti_client.py       # Graphiti 客户端封装
   ├── episode_manager.py       # 情节管理
-  └── query_generator.py       # 智能查询生成
   ```
 - [ ] 实现基础的 Graphiti 客户端封装
 - [ ] 创建运维情节类型枚举定义
