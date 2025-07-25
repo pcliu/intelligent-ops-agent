@@ -120,6 +120,24 @@ wheels = [
 ]
 
 [[package]]
+name = "anthropic"
+version = "0.59.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fe/cf/52daff015f5a1f24eec891b3041f5f816712fea8b5113dc76638bcbc23d8/anthropic-0.59.0.tar.gz", hash = "sha256:d710d1ef0547ebbb64b03f219e44ba078e83fc83752b96a9b22e9726b523fd8f", size = 425679 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3c/b1/03f680393eac04afd8f2be44ee0e39e033c40faf43dbc1c11764b07a2687/anthropic-0.59.0-py3-none-any.whl", hash = "sha256:cbc8b3dccef66ad6435c4fa1d317e5ebb092399a4b88b33a09dc4bf3944c3183", size = 293057 },
+]
+
+[[package]]
 name = "anyio"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -739,6 +757,30 @@ wheels = [
 ]
 
 [[package]]
+name = "graphiti-core"
+version = "0.17.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "diskcache" },
+    { name = "neo4j" },
+    { name = "numpy" },
+    { name = "openai" },
+    { name = "posthog" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "tenacity" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/84/ad/5e2383a1de8d7f57a44614b3615fb661d30ab86a8394ae9a0a793ebbfea9/graphiti_core-0.17.8.tar.gz", hash = "sha256:7013f2ec9cc1452351c1fbcf57239c5d2a6b8a836bad956d1b006b09df495a27", size = 6464504 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a5/a6/d032e84176c02797609ea2cd4f0cb07e75492feeb7661e6212f00b19418e/graphiti_core-0.17.8-py3-none-any.whl", hash = "sha256:5e9b3547df7b856f54f9b95e38001d7ddb48d96a350f785aeb8f2bee58c8ebf7", size = 137944 },
+]
+
+[package.optional-dependencies]
+anthropic = [
+    { name = "anthropic" },
+]
+
+[[package]]
 name = "greenlet"
 version = "3.2.3"
 source = { registry = "https://pypi.org/simple" }
@@ -918,6 +960,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "dspy-ai" },
+    { name = "graphiti-core", extra = ["anthropic"] },
     { name = "httpx" },
     { name = "langchain" },
     { name = "langchain-community" },
@@ -925,6 +968,7 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "langgraph-cli", extra = ["inmem"] },
+    { name = "neo4j" },
     { name = "numpy" },
     { name = "openai" },
     { name = "pandas" },
@@ -959,6 +1003,7 @@ requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
     { name = "dspy-ai", specifier = ">=2.4.0" },
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=6.0.0" },
+    { name = "graphiti-core", extras = ["anthropic"], specifier = ">=0.17.8" },
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
     { name = "langchain", specifier = ">=0.2.0" },
@@ -971,6 +1016,7 @@ requires-dist = [
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.0.0" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.22.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "neo4j", specifier = ">=5.28.1" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "openai", specifier = ">=1.93.1" },
     { name = "pandas", specifier = ">=2.0.0" },
@@ -1793,6 +1839,18 @@ wheels = [
 ]
 
 [[package]]
+name = "neo4j"
+version = "5.28.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytz" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4b/20/733dac16f7cedc80b23093415822c9763302519cba0e7c8bcdb5c01fc512/neo4j-5.28.1.tar.gz", hash = "sha256:ae8e37a1d895099062c75bc359b2cce62099baac7be768d0eba7180c1298e214", size = 231094 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6a/57/94225fe5e9dabdc0ff60c88cbfcedf11277f4b34e7ab1373d3e62dbdd207/neo4j-5.28.1-py3-none-any.whl", hash = "sha256:6755ef9e5f4e14b403aef1138fb6315b120631a0075c138b5ddb2a06b87b09fd", size = 312258 },
+]
+
+[[package]]
 name = "nodeenv"
 version = "1.9.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2065,6 +2123,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538 },
+]
+
+[[package]]
+name = "posthog"
+version = "6.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "backoff" },
+    { name = "distro" },
+    { name = "python-dateutil" },
+    { name = "requests" },
+    { name = "six" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/87/db/484f5faedf6dfe3dcb0dcd2e86eea02f25f549b04d60499a765725a0eacc/posthog-6.2.1.tar.gz", hash = "sha256:770f3333b6576f334dad873a62078d36300094d9d33292dfc080b01de8586967", size = 96101 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ed/48/9e040befb11643c8e214fa83d18e5a6d823239ea8dbfba9d76912258ff63/posthog-6.2.1-py3-none-any.whl", hash = "sha256:e2edf15b5ccdeaa46c4a0951ca5919599248a7ef6106c59fcf2ea40c010d8609", size = 113484 },
 ]
 
 [[package]]

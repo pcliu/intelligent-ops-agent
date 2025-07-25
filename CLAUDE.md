@@ -249,3 +249,86 @@ uv run pytest --cov=src/dspy_modules tests/unit/
   - **Centralized info collection**: `collect_info` node handles all user input gathering
   - **Business data focus**: Core state contains business data, messages are auxiliary
   - **Simplified flow**: Missing prerequisites → `collect_info` → `router` → business node
+
+
+### Graphiti 长期记忆集成
+
+**Graphiti Overview**: 
+Graphiti 是一个专为 AI 智能体设计的时序知识图谱框架，用于构建实时、动态的知识图谱系统。它能够为智能运维智能体提供强大的长期记忆功能，通过图搜索查找历史信息和设备关联关系。
+
+**核心特性**:
+- **实时增量更新**: 无需批量重计算，支持实时数据集成
+- **双时态数据模型**: 跟踪事件发生时间和数据摄入时间，支持时间点查询
+- **混合检索**: 结合语义嵌入、关键词搜索(BM25)和图遍历的多种搜索方式
+- **时态感知**: 跟踪事实和关系随时间的变化，支持点时查询
+- **情节处理**: 以离散情节方式摄入数据，保持数据溯源
+
+**技术要求**:
+- Python 3.10+
+- Neo4j 5.26+ 或 FalkorDB 1.1.2+
+- 支持多种 LLM 提供商 (OpenAI, Azure, Google, Anthropic, Groq, Ollama)
+
+**安装方式**:
+```bash
+# 基础安装
+uv add graphiti-core
+
+# 支持特定提供商
+uv add graphiti-core[anthropic]  # Anthropic 支持
+uv add graphiti-core[google-genai]  # Google 支持
+uv add graphiti-core[groq]  # Groq 支持
+```
+
+**基础用法模式**:
+```python
+# 初始化 Graphiti
+graphiti = Graphiti(
+    neo4j_uri="bolt://localhost:7687",
+    neo4j_user="neo4j", 
+    neo4j_password="password",
+    llm_client=LLMClient(config=llm_config),
+    embedder=EmbedderClient(config=embedder_config)
+)
+
+# 构建索引和约束
+await graphiti.build_indices_and_constraints()
+
+# 添加情节数据
+await graphiti.add_episode(
+    name='Alert Episode',
+    episode_body='服务器CPU使用率超过90%，数据库连接池满载',
+    source=EpisodeType.text,
+    source_description='运维告警信息'
+)
+
+# 执行混合搜索
+results = await graphiti.search(
+    query='数据库性能问题',
+    center_node_uuid=None,  # 可选：指定中心节点
+    limit=10
+)
+```
+
+**智能运维场景应用**:
+1. **告警关联分析**: 存储历史告警和设备关系，分析告警模式
+2. **故障诊断记忆**: 记录故障现象、根因和解决方案的关联关系
+3. **设备依赖关系**: 维护设备间的依赖关系图谱，支持影响面分析
+4. **运维知识积累**: 积累运维经验和最佳实践，形成知识图谱
+5. **性能趋势分析**: 跟踪系统性能指标的时序变化和关联关系
+
+**集成架构建议**:
+- 在现有 DSPy 模块中集成 Graphiti 作为记忆检索组件
+- 在 LangGraph 工作流中添加记忆存储和检索节点
+- 通过 ChatState 传递记忆上下文信息
+- 支持异步操作模式与现有架构兼容
+
+**性能优势**:
+- 在 DMR 基准测试中准确率达到 94.8%
+- 在 LongMemEval 基准测试中准确率提升 18.5%，响应延迟降低 90%
+- 支持亚秒级查询响应
+- 可扩展到企业级应用场景
+
+**参考资源**:
+- GitHub 仓库: https://github.com/getzep/graphiti
+- 文档地址: https://help.getzep.com/graphiti/graphiti/overview
+- PyPI 包: https://pypi.org/project/graphiti-core/

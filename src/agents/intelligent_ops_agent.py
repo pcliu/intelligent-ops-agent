@@ -36,7 +36,7 @@ class AgentConfig:
 
 
 class ChatState(TypedDict):
-    """极简的智能运维状态 - 只保留真正需要跨节点共享的数据"""
+    """智能运维状态 - 集成记忆系统和信息收集功能"""
     # LangGraph 标准聊天字段
     messages: Annotated[List[BaseMessage], add_messages]  # 聊天消息列表
     
@@ -52,8 +52,69 @@ class ChatState(TypedDict):
     execution_result: Optional[Dict[str, Any]]  # 执行结果
     report: Optional[Dict[str, Any]]  # 报告
     
+    # 记忆系统字段（精简版）
+    memory_queries: Optional[List[str]]  # 待执行查询（空=不需要检索）
+    memory_context: Optional[Dict[str, Any]]  # 检索结果
+    
+    # 信息收集字段（精简版）
+    info_collection_queries: Optional[List[str]]  # 待收集信息类型（空=不需要收集）
+    info_collection_context: Optional[Dict[str, Any]]  # 收集结果
+    
     # 调试支持
     errors: Optional[List[str]]  # 错误列表
+
+
+def validate_chat_state(state: ChatState) -> bool:
+    """验证 ChatState 的有效性"""
+    try:
+        # 必须字段检查
+        if not isinstance(state.get("messages", []), list):
+            return False
+        
+        # 记忆查询字段验证
+        memory_queries = state.get("memory_queries")
+        if memory_queries is not None and not isinstance(memory_queries, list):
+            return False
+        
+        # 记忆上下文字段验证  
+        memory_context = state.get("memory_context")
+        if memory_context is not None and not isinstance(memory_context, dict):
+            return False
+        
+        # 信息收集查询字段验证
+        info_queries = state.get("info_collection_queries")
+        if info_queries is not None and not isinstance(info_queries, list):
+            return False
+        
+        # 信息收集上下文字段验证
+        info_context = state.get("info_collection_context")
+        if info_context is not None and not isinstance(info_context, dict):
+            return False
+        
+        return True
+        
+    except Exception:
+        return False
+
+
+def create_empty_chat_state() -> ChatState:
+    """创建空的 ChatState"""
+    return ChatState(
+        messages=[],
+        alert_info=None,
+        symptoms=None,
+        context=None,
+        analysis_result=None,
+        diagnostic_result=None,
+        action_plan=None,
+        execution_result=None,
+        report=None,
+        memory_queries=None,
+        memory_context=None,
+        info_collection_queries=None,
+        info_collection_context=None,
+        errors=None
+    )
 
 
 # ==================== 人类干预工具 ====================
