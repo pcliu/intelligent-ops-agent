@@ -49,7 +49,7 @@ class ActionPlan(BaseModel):
 class ActionGeneration(dspy.Signature):
     """行动生成签名"""
     root_cause: str = dspy.InputField(desc="根本原因")
-    impact_assessment: str = dspy.InputField(desc="影响评估")
+    impact_analysis: str = dspy.InputField(desc="影响分析")
     system_context: str = dspy.InputField(desc="系统上下文")
     
     action_steps: str = dspy.OutputField(desc="行动步骤列表")
@@ -107,7 +107,7 @@ class ActionPlanner(dspy.Module):
         # 1. 生成行动步骤
         action_result = self.action_generator(
             root_cause=diagnostic_result.root_cause,
-            impact_assessment=diagnostic_result.impact_assessment,
+            impact_analysis=diagnostic_result.impact_analysis,
             system_context=self._format_system_context(system_context)
         )
         
@@ -132,7 +132,7 @@ class ActionPlanner(dspy.Module):
         return ActionPlan(
             plan_id=f"plan_{diagnostic_result.incident_id}",
             incident_id=diagnostic_result.incident_id,
-            priority=diagnostic_result.impact_assessment,
+            priority=diagnostic_result.impact_analysis,
             estimated_duration=action_result.estimated_duration,
             risk_assessment=risk_result.risk_factors,
             approval_required=self._requires_approval(risk_result.risk_score),
@@ -256,13 +256,13 @@ class ActionPlanner(dspy.Module):
         notifications = []
         
         # 基于影响级别确定通知范围
-        if diagnostic_result.impact_assessment == "critical":
+        if diagnostic_result.impact_analysis == "critical":
             notifications.extend([
                 "通知运维团队负责人",
                 "通知业务负责人",
                 "更新事件管理系统"
             ])
-        elif diagnostic_result.impact_assessment == "high":
+        elif diagnostic_result.impact_analysis == "high":
             notifications.extend([
                 "通知运维团队",
                 "更新事件管理系统"

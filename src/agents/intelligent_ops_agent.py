@@ -52,6 +52,9 @@ class ChatState(TypedDict):
     execution_result: Optional[Dict[str, Any]]  # 执行结果
     report: Optional[Dict[str, Any]]  # 报告
     
+    # 路由控制
+    _target_node: Optional[str]  # 目标节点（用于路由决策）
+    
     # 调试支持
     errors: Optional[List[str]]  # 错误列表
 
@@ -224,6 +227,7 @@ class IntelligentOpsAgent:
         agent_graph.add_node("plan_actions", self._plan_actions_node)
         agent_graph.add_node("execute_actions", self._execute_actions_node)
         agent_graph.add_node("generate_report", self._generate_report_node)
+        agent_graph.add_node("update_memories", self._update_memories_node)
         agent_graph.add_node("finalize", self._finalize_node)
         agent_graph.add_node("error_handler", self._error_handler_node)
         
@@ -297,16 +301,19 @@ class IntelligentOpsAgent:
             }
         )
         
-        # generate_report 节点保持原有逻辑
+        # generate_report → update_memories → finalize
         agent_graph.add_conditional_edges(
             "generate_report",
             self._generate_report_condition,
             {
-                "finalize": "finalize",
+                "update_memories": "update_memories",
                 "collect_info": "collect_info",
                 "error": "error_handler"
             }
         )
+        
+        # update_memories → finalize
+        agent_graph.add_edge("update_memories", "finalize")
         
         # 错误处理
         agent_graph.add_conditional_edges(
@@ -563,51 +570,25 @@ class IntelligentOpsAgent:
             if not has_basic_info:
                 return await self._redirect_to_collect_info(state, "diagnose_issue", "缺少基本问题信息（症状、上下文或告警）")
             
-            # 创建诊断上下文
-            from src.dspy_modules.diagnostic_agent import DiagnosticContext
-            from src.dspy_modules.alert_analyzer import AlertAnalysisResult
+            # 准备 ReAct 诊断所需的参数
+            alert_info = state.get("alert_info")
             
-            # 使用现有的告警分析结果，或创建基于症状的分析结果
-            analysis_result = state.get("analysis_result")
-            if analysis_result:
-                # 使用告警分析结果
-                alert_info_dict = state.get("alert_info", {})
-                if isinstance(alert_info_dict, dict):
-                    alert_id = alert_info_dict.get("alert_id", "unknown")
-                else:
-                    alert_id = "unknown"
-                    
-                alert_analysis = AlertAnalysisResult(
-                    alert_id=alert_id,
-                    priority=analysis_result.get("priority", "medium"),
-                    category=analysis_result.get("category", "investigation"), 
-                    urgency_score=analysis_result.get("urgency_score", 0.5),
-                    root_cause_hints=analysis_result.get("root_cause_hints", symptoms),
-                    recommended_actions=analysis_result.get("recommended_actions", [])
-                )
-            else:
-                # 基于症状创建分析结果
-                alert_analysis = AlertAnalysisResult(
+            # 如果没有明确的告警信息，创建基于症状的告警
+            if not alert_info:
+                from src.dspy_modules.alert_analyzer import AlertInfo
+                alert_info = AlertInfo(
                     alert_id="diagnostic_request",
-                    priority="medium",
-                    category="investigation",
-                    urgency_score=0.5,
-                    root_cause_hints=symptoms,
-                    recommended_actions=[]
+                    timestamp=datetime.now().isoformat(),
+                    severity="medium",
+                    source="system",
+                    message=f"系统异常：{'; '.join(symptoms[:2])}" if symptoms else "系统需要诊断"
                 )
             
-            diagnostic_context = DiagnosticContext(
-                alert_analysis=alert_analysis,
-                system_metrics=context.get("system_metrics", {}) if context else {},
-                log_entries=context.get("log_entries", []) if context else [],
-                historical_incidents=[],
-                topology_info=context.get("topology_info", {}) if context else {}
-            )
-            
-            # 执行诊断 - 使用 asyncio.to_thread 处理同步调用
+            # 执行 ReAct 诊断 - 使用新的接口
             diagnostic_result = await asyncio.to_thread(
                 self.diagnostic_agent.forward,
-                diagnostic_context
+                alert_info,
+                symptoms
             )
             
             # 如果诊断置信度低，跳转到信息收集节点
@@ -620,7 +601,7 @@ class IntelligentOpsAgent:
                     "diagnostic_result": {
                         "root_cause": diagnostic_result.root_cause,
                         "confidence_score": diagnostic_result.confidence_score,
-                        "impact_assessment": diagnostic_result.impact_assessment,
+                        "impact_analysis": diagnostic_result.impact_analysis,
                         "affected_components": diagnostic_result.affected_components,
                         "business_impact": diagnostic_result.business_impact,
                         "recovery_estimate": diagnostic_result.recovery_time_estimate,
@@ -641,7 +622,7 @@ class IntelligentOpsAgent:
                 "diagnostic_result": {
                     "root_cause": diagnostic_result.root_cause,
                     "confidence_score": diagnostic_result.confidence_score,
-                    "impact_assessment": diagnostic_result.impact_assessment,
+                    "impact_analysis": diagnostic_result.impact_analysis,
                     "affected_components": diagnostic_result.affected_components,
                     "business_impact": diagnostic_result.business_impact,
                     "recovery_estimate": diagnostic_result.recovery_time_estimate,
@@ -656,7 +637,7 @@ class IntelligentOpsAgent:
                 f"🩺 **故障诊断完成**\n\n"
                 f"🔍 **根本原因**: {diagnostic_result.root_cause}\n"
                 f"📊 **置信度**: {diagnostic_result.confidence_score:.2f}\n"
-                f"💥 **影响评估**: {diagnostic_result.impact_assessment}\n"
+                f"💥 **影响分析**: {diagnostic_result.impact_analysis}\n"
                 f"🏢 **业务影响**: {diagnostic_result.business_impact}\n"
                 f"⏱️ **预计恢复时间**: {diagnostic_result.recovery_time_estimate}\n"
                 f"🔧 **受影响组件**: {', '.join(diagnostic_result.affected_components) if diagnostic_result.affected_components else 'N/A'}\n"
@@ -682,7 +663,7 @@ class IntelligentOpsAgent:
                 incident_id=diagnostic_result.get("incident_id", "plan_request"),
                 root_cause=diagnostic_result.get("root_cause", "Unknown"),
                 confidence_score=diagnostic_result.get("confidence_score", 0.5),
-                impact_assessment=diagnostic_result.get("impact_assessment", "medium"),
+                impact_analysis=diagnostic_result.get("impact_analysis", "medium"),
                 affected_components=diagnostic_result.get("affected_components", []),
                 business_impact=diagnostic_result.get("business_impact", "Unknown"),
                 recovery_time_estimate=diagnostic_result.get("recovery_estimate", "Unknown"),
@@ -1007,6 +988,215 @@ class IntelligentOpsAgent:
                 "errors": state.get("errors", []) + [f"Report generation error: {str(e)}"]
             }
     
+    async def _update_memories_node(self, state: ChatState) -> ChatState:
+        """更新记忆节点 - 人工审核后存储完整业务状态"""
+        from datetime import datetime
+        
+        try:
+            # 生成记忆更新摘要
+            memory_summary = self._generate_memory_summary(state)
+            
+            # 人工审核：请求操作员确认
+            approval_result = request_operator_input(
+                query=f"📚 **记忆更新审核**\n\n{memory_summary}\n\n是否存储此次运维处理过程到长期记忆？\n\n- 输入 'yes' 或 '是' 确认存储\n- 输入 'no' 或 '否' 跳过存储\n- 输入其他内容作为备注（将连同处理过程一起存储）",
+                context={
+                    "type": "memory_approval",
+                    "current_state": "update_memories_node",
+                    "memory_summary": memory_summary,
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+            
+            # 如果返回空值，默认跳过存储
+            if not approval_result:
+                approval_result = "no"
+            
+            # 解析审核结果
+            if approval_result.lower() in ['yes', 'y', '是', '同意']:
+                # 获取记忆工具并存储
+                try:
+                    from src.utils.memory_tools import get_memory_tool
+                    memory_tool = get_memory_tool()
+                    
+                    # 创建完整的业务状态情节
+                    episode_name = self._generate_episode_name(state)
+                    episode_content = self._generate_comprehensive_episode_content(state)
+                    
+                    await memory_tool.add_episode(
+                        name=episode_name,
+                        content=episode_content,
+                        episode_type="complete_workflow",
+                        source_description="智能运维完整流程记录"
+                    )
+                    
+                    print(f"✅ 记忆更新完成: 存储了完整业务流程情节")
+                    # 添加确认消息到状态
+                    return self._add_ai_message_to_state(
+                        state,
+                        f"📚 **记忆更新完成**\n\n"
+                        f"✅ 已将本次运维处理过程存储到长期记忆系统\n"
+                        f"📝 **情节名称**: {episode_name}\n"
+                        f"💾 **存储类型**: 完整工作流记录\n"
+                        f"⏰ **存储时间**: {datetime.now().strftime('%H:%M:%S')}"
+                    )
+                except Exception as memory_error:
+                    print(f"⚠️ 记忆存储失败，但工作流继续: {memory_error}")
+                    return self._add_ai_message_to_state(
+                        state,
+                        f"📚 **记忆更新失败**\n\n"
+                        f"⚠️ 记忆系统暂时不可用，但工作流已正常完成\n"
+                        f"⏰ **时间**: {datetime.now().strftime('%H:%M:%S')}"
+                    )
+                
+            elif approval_result.lower() in ['no', 'n', '否', '拒绝']:
+                print(f"⏸️ 用户选择跳过记忆存储")
+                return self._add_ai_message_to_state(
+                    state,
+                    f"⏸️ **记忆更新已跳过**\n\n"
+                    f"用户选择不存储本次处理过程到记忆系统\n"
+                    f"⏰ **决定时间**: {datetime.now().strftime('%H:%M:%S')}"
+                )
+            else:
+                # 用户提供了备注，仍然存储但加上备注
+                try:
+                    from src.utils.memory_tools import get_memory_tool
+                    memory_tool = get_memory_tool()
+                    
+                    episode_name = self._generate_episode_name(state)
+                    episode_content = self._generate_comprehensive_episode_content(state)
+                    episode_content += f"\n\n运维人员备注: {approval_result}"
+                    
+                    await memory_tool.add_episode(
+                        name=episode_name,
+                        content=episode_content,
+                        episode_type="complete_workflow",
+                        source_description="智能运维完整流程记录（含人工备注）"
+                    )
+                    
+                    print(f"✅ 记忆更新完成: 存储了完整业务流程情节（含备注）")
+                    
+                    return self._add_ai_message_to_state(
+                        state,
+                        f"📚 **记忆更新完成（含备注）**\n\n"
+                        f"✅ 已将本次运维处理过程存储到长期记忆系统\n"
+                        f"📝 **情节名称**: {episode_name}\n"
+                        f"💬 **备注**: {approval_result}\n"
+                        f"⏰ **存储时间**: {datetime.now().strftime('%H:%M:%S')}"
+                    )
+                except Exception as memory_error:
+                    print(f"⚠️ 记忆存储失败，但工作流继续: {memory_error}")
+                    return self._add_ai_message_to_state(
+                        state,
+                        f"📚 **记忆更新失败**\n\n"
+                        f"⚠️ 记忆系统暂时不可用，但工作流已正常完成\n"
+                        f"💬 **备注**: {approval_result}\n"
+                        f"⏰ **时间**: {datetime.now().strftime('%H:%M:%S')}"
+                    )
+            
+        except Exception as e:
+            if "Interrupt" in type(e).__name__ or "interrupt" in str(e).lower():
+                raise
+            return self._create_error_state(state, e, "update_memories")
+
+    def _generate_memory_summary(self, state: ChatState) -> str:
+        """生成记忆更新摘要供人工审核"""
+        summary_parts = []
+        
+        # 告警信息
+        if alert_info := state.get("alert_info"):
+            summary_parts.append(f"📊 **告警信息**: {alert_info.source} - {alert_info.message}")
+        
+        # 诊断结果
+        if diagnostic_result := state.get("diagnostic_result"):
+            summary_parts.append(f"🔍 **诊断结果**: {diagnostic_result.get('root_cause', 'N/A')}")
+            summary_parts.append(f"📈 **置信度**: {diagnostic_result.get('confidence_score', 0):.2f}")
+        
+        # 行动计划
+        if action_plan := state.get("action_plan"):
+            step_count = len(action_plan.get('steps', []))
+            summary_parts.append(f"📋 **行动计划**: {step_count} 个步骤")
+        
+        # 执行结果
+        if execution_result := state.get("execution_result"):
+            summary_parts.append(f"⚡ **执行状态**: {execution_result.get('overall_status', 'N/A')}")
+        
+        return "\n".join(summary_parts)
+
+    def _generate_episode_name(self, state: ChatState) -> str:
+        """生成情节名称"""
+        from datetime import datetime
+        # 基于告警或诊断结果生成名称
+        if alert_info := state.get("alert_info"):
+            return f"运维处理_{alert_info.source}_{datetime.now().strftime('%Y%m%d_%H%M')}"
+        elif diagnostic_result := state.get("diagnostic_result"):
+            root_cause = diagnostic_result.get('root_cause', '')[:20]
+            return f"故障处理_{root_cause}_{datetime.now().strftime('%Y%m%d_%H%M')}"
+        else:
+            return f"运维任务_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    def _generate_comprehensive_episode_content(self, state: ChatState) -> str:
+        """生成完整的情节内容"""
+        from datetime import datetime
+        content_parts = []
+        
+        # 基本信息
+        content_parts.append(f"=== 智能运维完整处理记录 ===")
+        content_parts.append(f"处理时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # 告警信息
+        if alert_info := state.get("alert_info"):
+            content_parts.append(f"\n**告警信息:**")
+            content_parts.append(f"- 来源: {alert_info.source}")
+            content_parts.append(f"- 消息: {alert_info.message}")
+            content_parts.append(f"- 严重程度: {alert_info.severity}")
+            content_parts.append(f"- 时间戳: {alert_info.timestamp}")
+        
+        # 症状
+        if symptoms := state.get("symptoms"):
+            content_parts.append(f"\n**观察症状:**")
+            for symptom in symptoms:
+                content_parts.append(f"- {symptom}")
+        
+        # 上下文信息
+        if context := state.get("context"):
+            content_parts.append(f"\n**系统上下文:**")
+            for key, value in context.items():
+                content_parts.append(f"- {key}: {value}")
+        
+        # 诊断结果
+        if diagnostic_result := state.get("diagnostic_result"):
+            content_parts.append(f"\n**诊断结果:**")
+            content_parts.append(f"- 根本原因: {diagnostic_result.get('root_cause', 'N/A')}")
+            content_parts.append(f"- 置信度: {diagnostic_result.get('confidence_score', 0):.2f}")
+            content_parts.append(f"- 影响分析: {diagnostic_result.get('impact_analysis', 'N/A')}")
+            content_parts.append(f"- 业务影响: {diagnostic_result.get('business_impact', 'N/A')}")
+            
+        # 行动计划
+        if action_plan := state.get("action_plan"):
+            content_parts.append(f"\n**行动计划:**")
+            content_parts.append(f"- 计划ID: {action_plan.get('plan_id', 'N/A')}")
+            content_parts.append(f"- 优先级: {action_plan.get('priority', 'N/A')}")
+            content_parts.append(f"- 预计持续时间: {action_plan.get('estimated_duration', 'N/A')} 分钟")
+            
+            if steps := action_plan.get('steps', []):
+                content_parts.append(f"- 执行步骤 ({len(steps)} 项):")
+                for i, step in enumerate(steps, 1):
+                    content_parts.append(f"  {i}. {step.get('description', 'N/A')}")
+        
+        # 执行结果
+        if execution_result := state.get("execution_result"):
+            content_parts.append(f"\n**执行结果:**")
+            content_parts.append(f"- 整体状态: {execution_result.get('overall_status', 'N/A')}")
+            content_parts.append(f"- 成功步骤: {execution_result.get('successful_steps', 0)}")
+            content_parts.append(f"- 失败步骤: {execution_result.get('failed_steps', 0)}")
+        
+        # 最终报告
+        if report := state.get("report"):
+            content_parts.append(f"\n**最终报告:**")
+            content_parts.append(f"- 摘要: {report.get('summary', 'N/A')}")
+            content_parts.append(f"- 状态: {report.get('status', 'N/A')}")
+        
+        return "\n".join(content_parts)
     
     async def _finalize_node(self, state: ChatState) -> ChatState:
         """完成节点 - 支持聊天模式和任务模式"""
@@ -1381,9 +1571,9 @@ class IntelligentOpsAgent:
         if self._has_backjump_request(state):
             return "router"
         
-        # 正常情况下：如果有报告，结束流程
+        # 正常情况下：如果有报告，转到记忆更新
         if state.get("report"):
-            return "finalize"
+            return "update_memories"
         
         # 如果没有报告，跳转到collect_info收集信息
         return "collect_info"

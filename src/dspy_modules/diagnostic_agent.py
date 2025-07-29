@@ -1,7 +1,8 @@
 import dspy
+from dspy import Tool
 from typing import Dict, List, Any, Optional
 from pydantic import BaseModel, Field
-from .alert_analyzer import AlertAnalysisResult
+from .alert_analyzer import AlertAnalysisResult, AlertInfo
 
 
 class DiagnosticContext(BaseModel):
@@ -19,14 +20,28 @@ class DiagnosticResult(BaseModel):
     incident_id: str
     root_cause: str
     confidence_score: float  # 0-1
-    impact_assessment: str
+    impact_analysis: str  # 改名以匹配设计文档
     affected_components: List[str] = Field(default_factory=list)
     business_impact: str
     recovery_time_estimate: str
+    recommended_actions: List[str] = Field(default_factory=list)  # 新增字段
     similar_incidents: List[str] = Field(default_factory=list)
     evidence: List[str] = Field(default_factory=list)
 
 
+# 新的 ReAct 诊断签名
+class DiagnosticSignature(dspy.Signature):
+    """智能诊断签名 - 适用于 ReAct 模式"""
+    alert_info: str = dspy.InputField(desc="告警信息详情，包括来源、消息、严重程度等")
+    symptoms: str = dspy.InputField(desc="观察到的症状列表和系统异常表现")
+    
+    diagnosis: str = dspy.OutputField(desc="完整的诊断结果和根因分析")
+    confidence: float = dspy.OutputField(desc="诊断置信度 0-1")
+    impact_analysis: str = dspy.OutputField(desc="影响分析，包括受影响组件和业务影响")
+    recommendations: str = dspy.OutputField(desc="建议的后续行动，用分号分隔")
+
+
+# 保留原有签名以兼容现有代码
 class RootCauseAnalysis(dspy.Signature):
     """根因分析签名"""
     alert_info: str = dspy.InputField(desc="告警分析结果")
@@ -60,22 +75,84 @@ class SimilarIncidentRetrieval(dspy.Signature):
 
 
 class DiagnosticAgent(dspy.Module):
-    """诊断智能体模块
+    """基于 ReAct 的诊断智能体
     
     功能：
-    - 根因分析
-    - 影响范围评估
-    - 历史案例检索
-    - 诊断报告生成
+    - 智能根因分析
+    - 自动搜索历史案例
+    - 综合诊断报告生成
     """
     
     def __init__(self):
         super().__init__()
+        
+        # 导入记忆工具函数
+        from src.utils.memory_tools import search_historical_cases, search_solution_patterns
+        
+        # 定义记忆工具
+        self.search_cases_tool = Tool(
+            search_historical_cases,
+            name="search_historical_cases",
+            desc="搜索历史诊断案例，帮助分析当前问题的根因和解决方案"
+        )
+        
+        self.search_solutions_tool = Tool(
+            search_solution_patterns,
+            name="search_solution_patterns", 
+            desc="搜索相关问题的解决方案和最佳实践，为后续行动提供参考"
+        )
+        
+        # 创建 ReAct 智能体
+        self.react_agent = dspy.ReAct(
+            signature=DiagnosticSignature,
+            tools=[self.search_cases_tool, self.search_solutions_tool],
+            max_iters=3  # 限制推理迭代次数
+        )
+        
+        # 保留原有的Chain-of-Thought模块用于兼容
         self.root_cause_analyzer = dspy.ChainOfThought(RootCauseAnalysis)
         self.impact_assessor = dspy.ChainOfThought(ImpactAssessment)
         self.incident_retriever = dspy.ChainOfThought(SimilarIncidentRetrieval)
+    
+    def forward(self, alert_info: AlertInfo, symptoms: List[str]) -> DiagnosticResult:
+        """执行 ReAct 诊断推理
         
-    def forward(self, diagnostic_context: DiagnosticContext) -> DiagnosticResult:
+        Args:
+            alert_info: 告警信息
+            symptoms: 症状列表
+            
+        Returns:
+            DiagnosticResult: 诊断结果
+        """
+        # 准备输入
+        alert_str = f"来源: {alert_info.source}, 消息: {alert_info.message}, 严重程度: {alert_info.severity}"
+        symptoms_str = "; ".join(symptoms) if symptoms else "暂无明确症状"
+        
+        # ReAct 推理过程 - 智能体会自动决定是否需要搜索历史案例或解决方案
+        result = self.react_agent(
+            alert_info=alert_str,
+            symptoms=symptoms_str
+        )
+        
+        # 解析推荐行动
+        recommended_actions = []
+        if result.recommendations:
+            recommended_actions = [action.strip() for action in result.recommendations.split(";") if action.strip()]
+        
+        return DiagnosticResult(
+            incident_id=f"incident_{alert_info.alert_id}_{hash(alert_info.message) % 10000}",
+            root_cause=result.diagnosis,
+            confidence_score=result.confidence,
+            impact_analysis=result.impact_analysis,
+            affected_components=[alert_info.source],  # 简化处理
+            business_impact="待进一步评估",
+            recovery_time_estimate="待制定行动计划后确定",
+            recommended_actions=recommended_actions,
+            similar_incidents=[],  # ReAct 工具搜索结果已在推理中使用
+            evidence=[f"告警: {alert_info.message}", f"症状: {symptoms_str}"]
+        )
+    
+    def forward_legacy(self, diagnostic_context: DiagnosticContext) -> DiagnosticResult:
         """
         执行诊断分析
         
@@ -113,7 +190,7 @@ class DiagnosticAgent(dspy.Module):
             incident_id=diagnostic_context.alert_analysis.alert_id,
             root_cause=root_cause_result.root_cause,
             confidence_score=root_cause_result.confidence_score,
-            impact_assessment=impact_result.impact_level,
+            impact_analysis=impact_result.impact_level,
             affected_components=impact_result.affected_components.split(',') if impact_result.affected_components else [],
             business_impact=impact_result.business_impact,
             recovery_time_estimate=impact_result.recovery_time_estimate,
